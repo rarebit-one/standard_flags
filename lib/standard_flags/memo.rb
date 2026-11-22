@@ -1,0 +1,57 @@
+require "active_support/isolated_execution_state"
+
+module StandardFlags
+  # Per-unit-of-work memoisation.
+  #
+  # The store lives in ActiveSupport::IsolatedExecutionState and is opened and
+  # closed by an executor hook (see Engine), not by Rack middleware, so jobs,
+  # mailers, Action Cable and the console's `reload!` boundaries get the same
+  # treatment as requests. Outside an executor run nothing is memoised, which
+  # is what keeps ENV re-read in long-lived processes and between specs.
+  module Memo
+    KEY = :standard_flags_memo
+
+    # Registered with `app.executor.register_hook`.
+    module Hook
+      def self.run
+        Memo.start!
+        nil
+      end
+
+      def self.complete(_state)
+        Memo.stop!
+      end
+    end
+
+    class << self
+      def start!
+        ActiveSupport::IsolatedExecutionState[KEY] = {}
+      end
+
+      def stop!
+        ActiveSupport::IsolatedExecutionState.delete(KEY)
+      end
+
+      def active?
+        !store.nil?
+      end
+
+      def clear!
+        store&.clear
+      end
+
+      def fetch(key)
+        memo = store
+        return yield unless memo
+
+        memo.fetch(key) { memo[key] = yield }
+      end
+
+      private
+
+      def store
+        ActiveSupport::IsolatedExecutionState[KEY]
+      end
+    end
+  end
+end

@@ -1,0 +1,36 @@
+{
+  "description": "Legacy env names declared with env:, inversion of *_DISABLED names, and precedence of the canonical name.",
+  "registry": {
+    "flags": [
+      { "kind": "kill_switch", "key": "ai_assistant", "owner": "assistant", "env": "ACME_LEGACY_DISABLED", "inverted": true },
+      { "kind": "flag", "key": "new_reports", "owner": "reporting", "remove_by": "2027-01-01", "final": true,
+        "env": ["ACME_REPORTS_ENABLED", "ACME_REPORTS_V2"] }
+    ]
+  },
+  "cases": [
+    { "name": "inverted legacy true turns the kill switch off", "flag": "ai_assistant", "environment": "production",
+      "env_vars": { "ACME_LEGACY_DISABLED": "true" },
+      "expected": { "value": false, "variant": "off", "reason": "KILL_SWITCH", "source_env_var": "ACME_LEGACY_DISABLED" } },
+    { "name": "inverted legacy false keeps the kill switch on", "flag": "ai_assistant", "environment": "production",
+      "env_vars": { "ACME_LEGACY_DISABLED": "false" },
+      "expected": { "value": true, "variant": "on", "reason": "ENV_PIN", "source_env_var": "ACME_LEGACY_DISABLED" } },
+    { "name": "canonical name is never inverted", "flag": "ai_assistant", "environment": "production",
+      "env_vars": { "STANDARD_FLAGS_AI_ASSISTANT": "true" },
+      "expected": { "value": true, "variant": "on", "reason": "ENV_PIN", "source_env_var": "STANDARD_FLAGS_AI_ASSISTANT" } },
+    { "name": "canonical wins over legacy", "flag": "ai_assistant", "environment": "production",
+      "env_vars": { "STANDARD_FLAGS_AI_ASSISTANT": "on", "ACME_LEGACY_DISABLED": "true" },
+      "expected": { "value": true, "variant": "on", "reason": "ENV_PIN", "source_env_var": "STANDARD_FLAGS_AI_ASSISTANT" } },
+    { "name": "unparseable canonical falls through to legacy", "flag": "ai_assistant", "environment": "production",
+      "env_vars": { "STANDARD_FLAGS_AI_ASSISTANT": "maybe", "ACME_LEGACY_DISABLED": "1" },
+      "expected": { "value": false, "variant": "off", "reason": "KILL_SWITCH", "source_env_var": "ACME_LEGACY_DISABLED" } },
+    { "name": "unparseable legacy value is ignored", "flag": "ai_assistant", "environment": "production",
+      "env_vars": { "ACME_LEGACY_DISABLED": "disabled" },
+      "expected": { "value": true, "variant": "on", "reason": "DEFAULT" } },
+    { "name": "first parseable legacy name wins in declared order", "flag": "new_reports", "environment": "production",
+      "env_vars": { "ACME_REPORTS_ENABLED": "yes", "ACME_REPORTS_V2": "no" },
+      "expected": { "value": true, "variant": "on", "reason": "ENV_PIN", "source_env_var": "ACME_REPORTS_ENABLED" } },
+    { "name": "later legacy name is read when earlier ones are unset", "flag": "new_reports", "environment": "production",
+      "env_vars": { "ACME_REPORTS_V2": "on" },
+      "expected": { "value": true, "variant": "on", "reason": "ENV_PIN", "source_env_var": "ACME_REPORTS_V2" } }
+  ]
+}

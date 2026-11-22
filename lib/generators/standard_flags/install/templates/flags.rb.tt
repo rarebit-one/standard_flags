@@ -1,0 +1,53 @@
+# The flag registry. Every flag is declared once, here, with an owner.
+# Keys are immutable: never rename or reuse one. Remove a flag by replacing
+# its declaration with a tombstone.
+#
+# Each flag can be pinned with STANDARD_FLAGS_<KEY> (on/off, true/false, 1/0,
+# yes/no, or a declared mode value or variant). A pin beats the code default.
+
+StandardFlags.define do
+  # The logical environment name. Pass your own if staging boots with
+  # RAILS_ENV=production.
+  # env_resolver -> { ENV.fetch("APP_ENVIRONMENT", Rails.env) }
+
+  # Units a flag can target. Carried in the context today; used for targeting
+  # once runtime rules arrive.
+  # unit :account, from: ->(ctx) { ctx.account }
+
+  # A release flag: temporary, so it needs remove_by: and the final: value it
+  # settles on.
+  # flag :new_checkout,
+  #      owner: "payments",
+  #      description: "Rebuilt checkout flow",
+  #      remove_by: "2027-03-01",
+  #      final: true,
+  #      default: { staging: true, production: false },
+  #      expose: { web: :newCheckout }
+
+  # A kill switch: on by default, fails open, permanent. `env:` keeps reading
+  # an existing variable; `inverted: true` because the legacy name is a
+  # *_DISABLED variable.
+  # kill_switch :ai_assistant,
+  #             owner: "assistant",
+  #             env: "ACME_LEGACY_DISABLED",
+  #             inverted: true,
+  #             expose: { web: :assistant, mobile: :assistant }
+
+  # A mode. Presets: :sensor (off/sensor/on), :cutover (off/allowlist/all),
+  # :shadow (off/shadow/enforce); or values: %i[...].
+  # mode :strict_gates, owner: "platform", preset: :sensor
+
+  # An experiment. Resolves to its first variant (control) unless pinned.
+  # experiment :home_hero, owner: "growth", variants: %w[control savings privacy]
+
+  # A compatibility shim: on until removed.
+  # compat :legacy_form_auth, owner: "identity"
+
+  # A flag that must never be on in an environment: forced off there, and a
+  # pin that tries reports once per process.
+  # flag :demo_data, owner: "platform", remove_by: "2027-06-01", final: false,
+  #      forbidden_in: :production
+
+  # A removed key that can never be declared again.
+  # tombstone :manual_entry, removed: "2026-12-01"
+end

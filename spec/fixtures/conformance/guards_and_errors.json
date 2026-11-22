@@ -1,0 +1,33 @@
+{
+  "description": "forbidden_in guards, which run before ENV pins, and fail-safe results for unknown and removed keys outside strict mode.",
+  "registry": {
+    "flags": [
+      { "kind": "flag", "key": "demo_data", "owner": "platform", "remove_by": "2027-01-01", "final": false,
+        "default": { "staging": true }, "forbidden_in": "production" },
+      { "kind": "mode", "key": "debug_tools", "owner": "platform", "values": ["off", "read_only", "full"],
+        "forbidden_in": ["production", "sandbox"] }
+    ],
+    "tombstones": [
+      { "key": "manual_entry", "removed": "2026-12-01" }
+    ]
+  },
+  "cases": [
+    { "name": "forbidden flag is off in the forbidden environment", "flag": "demo_data", "environment": "production",
+      "expected": { "value": false, "variant": "off", "reason": "DISABLED" } },
+    { "name": "forbidden flag ignores a pin in the forbidden environment", "flag": "demo_data", "environment": "production",
+      "env_vars": { "STANDARD_FLAGS_DEMO_DATA": "on" },
+      "expected": { "value": false, "variant": "off", "reason": "DISABLED" } },
+    { "name": "forbidden flag uses its default elsewhere", "flag": "demo_data", "environment": "staging",
+      "expected": { "value": true, "variant": "on", "reason": "DEFAULT" } },
+    { "name": "forbidden flag can be pinned elsewhere", "flag": "demo_data", "environment": "staging",
+      "env_vars": { "STANDARD_FLAGS_DEMO_DATA": "off" },
+      "expected": { "value": false, "variant": "off", "reason": "ENV_PIN", "source_env_var": "STANDARD_FLAGS_DEMO_DATA" } },
+    { "name": "forbidden mode is forced to its first value", "flag": "debug_tools", "environment": "sandbox",
+      "env_vars": { "STANDARD_FLAGS_DEBUG_TOOLS": "full" },
+      "expected": { "value": "off", "variant": "off", "reason": "DISABLED" } },
+    { "name": "unknown key fails safe outside strict mode", "flag": "never_declared", "environment": "production", "strict": false,
+      "expected": { "value": null, "variant": null, "reason": "ERROR", "error_code": "FLAG_NOT_FOUND" } },
+    { "name": "tombstoned key fails safe outside strict mode", "flag": "manual_entry", "environment": "production", "strict": false,
+      "expected": { "value": null, "variant": null, "reason": "ERROR", "error_code": "FLAG_NOT_FOUND" } }
+  ]
+}

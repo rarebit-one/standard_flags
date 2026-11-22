@@ -1,0 +1,58 @@
+inherit_gem:
+  rubocop-rails-omakase: rubocop.yml
+
+plugins:
+  - rubocop-rspec
+
+AllCops:
+  TargetRubyVersion: 4.0
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    - "tmp/**/*"
+    - "vendor/**/*"
+    - ".worktrees/**/*"
+
+RSpec/SpecFilePathFormat:
+  Enabled: false
+
+RSpec/MessageSpies:
+  Enabled: false
+
+RSpec/VerifiedDoubles:
+  Enabled: false
+
+RSpec/DescribeClass:
+  Exclude:
+    - spec/conformance_spec.rb
+    - spec/integration/**/*
+    - spec/standard_flags/notifiers_spec.rb
+    - spec/standard_flags/read_api_spec.rb
+    - spec/standard_flags/resolution_spec.rb
+
+# The conformance spec generates one example per fixture case at load time.
+RSpec/LeakyLocalVariable:
+  Exclude:
+    - spec/conformance_spec.rb
+
+Style/FrozenStringLiteralComment:
+  Enabled: false
+
+Metrics/BlockLength:
+  Exclude:
+    - "spec/**/*"
+    - "*.gemspec"
+    - "lib/tasks/**/*"
+
+Metrics/MethodLength:
+  Max: 20
+
+RSpec/ExampleLength:
+  Max: 15
+  CountAsOne: [ "array", "hash", "heredoc", "method_call" ]
+
+RSpec/MultipleExpectations:
+  Max: 5
+
+RSpec/NestedGroups:
+  Max: 4
