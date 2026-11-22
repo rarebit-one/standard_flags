@@ -6,6 +6,10 @@ module StandardFlags
   #   jobs, mailers, console reloads), instead of Rack middleware;
   # * config/flags.rb, loaded on boot and on every code reload;
   # * the Logger / Sentry / Metrics subscribers, once initializers have run.
+  #
+  # Rake tasks need no `rake_tasks` block: Rails::Engine already loads
+  # lib/tasks/**/*.rake, and loading the file again would give every task a
+  # second action.
   class Engine < ::Rails::Engine
     isolate_namespace StandardFlags
 
@@ -19,10 +23,6 @@ module StandardFlags
 
     config.to_prepare do
       StandardFlags.load_registry!
-    end
-
-    rake_tasks do
-      load File.expand_path("../tasks/standard_flags.rake", __dir__)
     end
   end
 end

@@ -44,6 +44,31 @@ RSpec.describe StandardFlags::TestHelpers do
     expect(StandardFlags.config).to be_strict
   end
 
+  describe "test overrides and forbidden_in guards" do
+    before do
+      define_flags { flag :demo_pages, owner: "platform", permanent: true, default: { development: true }, forbidden_in: :production }
+    end
+
+    let(:production) { StandardFlags::Context.new(env: "production") }
+
+    it "lets an override beat the guard, so with_flag cannot prove one" do
+      with_flag(:demo_pages, true) do
+        expect(StandardFlags.evaluate(:demo_pages, for: production)).to have_attributes(value: true, reason: "STATIC")
+      end
+    end
+
+    # The README pattern: a real ENV pin, as a host app reads it.
+    it "proves the guard with a real ENV pin" do
+      StandardFlags.config.env_source = ENV
+      ENV["STANDARD_FLAGS_DEMO_PAGES"] = "on"
+      expect(StandardFlags.evaluate(:demo_pages, for: production)).to have_attributes(value: false, reason: "DISABLED")
+      expect(StandardFlags.evaluate(:demo_pages, for: StandardFlags::Context.new(env: "staging")))
+        .to have_attributes(value: true, reason: "ENV_PIN")
+    ensure
+      ENV.delete("STANDARD_FLAGS_DEMO_PAGES")
+    end
+  end
+
   describe "automatic reset" do
     # Example order is random, so each half asserts the state it needs.
     it "starts every example without overrides" do

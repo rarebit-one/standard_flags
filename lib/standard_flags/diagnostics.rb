@@ -47,6 +47,7 @@ module StandardFlags
         source_env_var: evaluation.source_env_var,
         pinned: !scan.pin.nil?,
         remove_by: definition.remove_by&.iso8601,
+        permanent: definition.permanent?,
         stale: definition.stale?(today),
         audiences: definition.expose.transform_keys(&:to_s),
         scan: scan,

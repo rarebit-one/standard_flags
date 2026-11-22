@@ -7,6 +7,9 @@ module StandardFlags
   #   3. EnvPin       — STANDARD_FLAGS_<KEY>, then legacy `env:` names.
   #   4. CodeDefault  — the registry default for the current environment.
   #
+  # Test overrides beat guards, so a spec proving a `forbidden_in:` guard
+  # must use a real ENV pin, not `with_flag`.
+  #
   # Runtime rules (deny, allow, cohorts, percentages) slot in between 3 and 4,
   # so an ENV pin keeps beating the database and works with it down.
   module Resolvers

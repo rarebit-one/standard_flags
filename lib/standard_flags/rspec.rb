@@ -13,8 +13,9 @@ require "standard_flags"
 #
 #   it "shows the new checkout", flags: { new_checkout: true } do ... end
 #
-# Overrides are the first evaluation layer, so they beat ENV pins and
-# defaults. Unknown keys and values outside the declaration raise, unknown
+# Overrides are the first evaluation layer, so they beat `forbidden_in:`
+# guards, ENV pins and defaults: prove a guard with a real ENV pin, not an
+# override. Unknown keys and values outside the declaration raise, unknown
 # keys raise on read (strict mode), and everything resets after each example.
 module StandardFlags
   module TestHelpers

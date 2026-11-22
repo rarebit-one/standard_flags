@@ -9,6 +9,7 @@ RSpec.describe StandardFlags::Tooling do
       flag :new_checkout, owner: "payments", remove_by: "2027-03-01", final: true,
            default: { staging: true, production: false }, expose: { web: :newCheckout }
       flag :old_banner, owner: "growth", remove_by: "2020-01-01", final: false
+      flag :demo_pages, owner: "platform", permanent: true, default: { development: true }, forbidden_in: :production
       kill_switch :ai_assistant, owner: "assistant", env: "ACME_LEGACY_DISABLED", inverted: true,
                   expose: { web: :assistant, mobile: :chat }
       mode :strict_gates, owner: "platform", preset: :sensor, expose: { web: :strict_gates }
@@ -26,11 +27,12 @@ RSpec.describe StandardFlags::Tooling do
       expect(lines).to include(%w[ai_assistant kill_switch false KILL_SWITCH ACME_LEGACY_DISABLED -])
       expect(lines).to include(%w[new_checkout flag false DEFAULT - 2027-03-01])
       expect(lines).to include(%w[strict_gates mode off DEFAULT - -])
+      expect(lines).to include(%w[demo_pages flag false DISABLED - permanent])
     end
   end
 
   describe StandardFlags::Tooling::Stale do
-    it "lists flags past remove_by with their final value" do
+    it "lists flags past remove_by with their final value, never permanent ones" do
       expect(described_class.new(today: Date.new(2026, 1, 1)).render)
         .to eq("old_banner (flag, owner: growth) was due for removal on 2020-01-01, final: false")
     end
@@ -67,7 +69,7 @@ RSpec.describe StandardFlags::Tooling do
 
       expect(result).to be_failed
       expect(result.undeclared).to eq(manual_entry: [ "lib/tasks/cleanup.rake:1" ], typo_flag: [ "app/controllers/checkout_controller.rb:3" ])
-      expect(result.unreferenced).to eq(%i[ai_assistant old_banner])
+      expect(result.unreferenced).to eq(%i[ai_assistant demo_pages old_banner])
       expect(refs.render(result)).to include("ERROR tombstoned flag :manual_entry", "ERROR undeclared flag :typo_flag",
                                              "WARN  declared flag :ai_assistant has no references")
     end
@@ -87,7 +89,7 @@ RSpec.describe StandardFlags::Tooling do
       manifest = JSON.parse(described_class.new.render)
 
       expect(manifest.values_at("version", "flags").then { |v, flags| [ v, flags.map { |f| f["key"] } ] })
-        .to eq([ 1, %w[ai_assistant home_hero new_checkout old_banner strict_gates] ])
+        .to eq([ 1, %w[ai_assistant demo_pages home_hero new_checkout old_banner strict_gates] ])
       expect(manifest["flags"].find { |f| f["key"] == "ai_assistant" }).to eq(
         "key" => "ai_assistant", "kind" => "kill_switch", "type" => "boolean", "values" => [ true, false ],
         "default" => true, "audiences" => { "mobile" => "chat", "web" => "assistant" }
@@ -96,6 +98,17 @@ RSpec.describe StandardFlags::Tooling do
         .to eq("*" => false, "production" => false, "staging" => true)
       expect(manifest["tombstones"]).to eq([ { "key" => "manual_entry", "removed" => "2026-12-01" } ])
       expect(described_class.new.render).to eq(described_class.new.render).and(end_with("}\n"))
+    end
+
+    it "says whether each entry of kind flag is permanent" do
+      flags = JSON.parse(described_class.new.render)["flags"].to_h { |f| [ f["key"], f ] }
+
+      expect(flags.transform_values { |f| f.fetch("permanent", :absent) })
+        .to include("demo_pages" => true, "new_checkout" => false, "ai_assistant" => :absent)
+      expect(flags["demo_pages"]).to eq(
+        "key" => "demo_pages", "kind" => "flag", "type" => "boolean", "values" => [ true, false ],
+        "default" => { "*" => false, "development" => true }, "audiences" => {}, "permanent" => true
+      )
     end
   end
 

@@ -71,6 +71,38 @@ RSpec.describe StandardFlags::Controller do
     expect([ last_response.status, last_response.body ]).to eq([ 418, "new_reports:feature_disabled:reportsV2" ])
   end
 
+  describe "a per-guard responder" do
+    before do
+      StandardFlags.config.controller_responder = ->(controller, _denial) { controller.head 418 }
+    end
+
+    it "takes a callable that receives the controller and the denial" do
+      get_json "/legacy/api"
+      expect([ last_response.status, JSON.parse(last_response.body) ])
+        .to eq([ 422, { "error_code" => "FEATURE_OFF", "flag" => "new_reports" } ])
+    end
+
+    it "takes a Symbol naming a controller method" do
+      get "/legacy/page"
+      expect([ last_response.status, last_response.body ]).to eq([ 403, "unavailable: reportsV2 (403)" ])
+    end
+
+    it "applies to its own guard only; others keep the global responder" do
+      get "/legacy/plain"
+      expect(last_response.status).to eq(418)
+    end
+
+    it "is not called when the flag is on" do
+      with_flag(:new_reports, true) { get_json "/legacy/api" }
+      expect([ last_response.status, last_response.body ]).to eq([ 200, "api" ])
+    end
+
+    it "rejects anything that is neither callable nor a Symbol" do
+      expect { Class.new(DummyBaseController) { requires_flag :new_reports, with: "render_error" } }
+        .to raise_error(ArgumentError, /with: must respond to call/)
+    end
+  end
+
   it "shares the payload for an audience" do
     with_flag(:new_reports, true) { get "/features" }
     expect(JSON.parse(last_response.body)).to eq("features" => { "reportsV2" => true })

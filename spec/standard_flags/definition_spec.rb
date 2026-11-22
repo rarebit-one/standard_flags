@@ -158,6 +158,54 @@ RSpec.describe StandardFlags::Definition do
       flag = release(remove_by: "2026-01-01")
       expect([ flag.stale?(Date.new(2025, 12, 31)), flag.stale?(Date.new(2026, 1, 2)) ]).to eq([ false, true ])
     end
+
+    it "is never true for a permanent flag" do
+      expect(build(:flag, :demo_pages, owner: "platform", permanent: true).stale?(Date.new(2999, 1, 1))).to be(false)
+    end
+  end
+
+  describe "permanent flags" do
+    def permanent(**attributes)
+      build(:flag, :demo_pages, **{ owner: "platform", permanent: true }.merge(attributes))
+    end
+
+    it "needs no remove_by: or final:, and defaults off" do
+      flag = permanent
+      expect([ flag.permanent?, flag.remove_by, flag.final, flag.kind_default ]).to eq([ true, nil, nil, false ])
+    end
+
+    it "may default on, everywhere or per environment" do
+      expect(permanent(default: true).default_for("production")).to be(true)
+      expect(%w[development production].map { |env| permanent(default: { development: true }).default_for(env) })
+        .to eq([ true, false ])
+    end
+
+    it "combines with forbidden_in:" do
+      expect(permanent(default: { development: true }, forbidden_in: :production)).to be_forbidden_in(:production)
+    end
+
+    it "forbids remove_by: and final:" do
+      expect { permanent(remove_by: "2027-01-01") }.to raise_error(StandardFlags::DefinitionError, /permanent: and cannot have remove_by:/)
+      expect { permanent(final: false) }.to raise_error(StandardFlags::DefinitionError, /permanent: and cannot have final:/)
+    end
+
+    it "must be true or false" do
+      expect { permanent(permanent: "yes") }.to raise_error(StandardFlags::DefinitionError, /permanent: must be true or false/)
+    end
+
+    it "is false for release flags and other kinds" do
+      expect([ release.permanent?, release(permanent: false).permanent?,
+               build(:kill_switch, :ai_assistant, owner: "assistant").permanent? ]).to eq([ false, false, false ])
+    end
+
+    it "is only accepted on the flag kind" do
+      expect { build(:kill_switch, owner: "x", permanent: true) }
+        .to raise_error(StandardFlags::DefinitionError, /unknown attribute\(s\): :permanent/)
+    end
+
+    it "points a release flag missing remove_by: at permanent:" do
+      expect { build(:flag, owner: "x", final: true) }.to raise_error(StandardFlags::DefinitionError, /permanent: true/)
+    end
   end
 
   it "is frozen" do

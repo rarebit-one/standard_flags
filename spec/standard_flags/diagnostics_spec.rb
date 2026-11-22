@@ -8,6 +8,7 @@ RSpec.describe StandardFlags::Diagnostics do
       kill_switch :ai_assistant, owner: "assistant", env: "ACME_LEGACY_DISABLED", inverted: true, expose: { web: :assistant }
       flag :demo_data, owner: "platform", remove_by: "2027-01-01", final: false, forbidden_in: :production
       flag :old_banner, owner: "growth", remove_by: "2020-01-01", final: false
+      flag :demo_pages, owner: "platform", permanent: true, default: { development: true }, forbidden_in: :production
       mode :strict_gates, owner: "platform", preset: :sensor
     end
   end
@@ -17,7 +18,7 @@ RSpec.describe StandardFlags::Diagnostics do
   it "is ok with nothing to report" do
     report = described_class.report(today: Date.new(2019, 1, 1))
     expect(report).to include(status: :ok, environment: "production", forbidden_pins: [], rejected_pins: [], stale: [])
-    expect(report[:flags].map { |f| f[:key] }).to eq(%i[ai_assistant demo_data old_banner strict_gates])
+    expect(report[:flags].map { |f| f[:key] }).to eq(%i[ai_assistant demo_data old_banner demo_pages strict_gates])
   end
 
   it "reports each flag's value and source" do
@@ -42,6 +43,14 @@ RSpec.describe StandardFlags::Diagnostics do
       ":old_banner is past remove_by 2020-01-01",
       "STANDARD_FLAGS_TYPO does not match a declared flag"
     )
+  end
+
+  it "marks permanent flags and never lists them as stale" do
+    report = described_class.report(today: Date.new(2999, 1, 1))
+    rows = report[:flags].to_h { |f| [ f[:key], f.values_at(:permanent, :remove_by, :value, :reason) ] }
+    expect(rows.values_at(:demo_pages, :old_banner))
+      .to eq([ [ true, nil, false, "DISABLED" ], [ false, "2020-01-01", false, "DEFAULT" ] ])
+    expect(report[:stale].map { |s| s[:flag] }).not_to include(:demo_pages)
   end
 
   it "never includes raw environment values" do

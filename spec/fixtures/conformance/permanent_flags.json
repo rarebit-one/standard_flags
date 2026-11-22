@@ -1,0 +1,36 @@
+{
+  "description": "Permanent flags (kind flag, permanent: true): standing switches with no remove_by or final, defaulting off or on, that evaluate like any other flag, guards and pins included.",
+  "registry": {
+    "flags": [
+      { "kind": "flag", "key": "demo_pages", "owner": "platform", "permanent": true,
+        "default": { "development": true, "staging": true }, "forbidden_in": "production" },
+      { "kind": "flag", "key": "setup_screens", "owner": "platform", "permanent": true },
+      { "kind": "flag", "key": "outbound_email", "owner": "platform", "permanent": true, "default": true,
+        "env": "ACME_EMAIL_DISABLED", "inverted": true }
+    ]
+  },
+  "cases": [
+    { "name": "permanent flag defaults off where its default omits the environment", "flag": "demo_pages", "environment": "sandbox",
+      "expected": { "value": false, "variant": "off", "reason": "DEFAULT" } },
+    { "name": "permanent flag uses a per-environment default", "flag": "demo_pages", "environment": "staging",
+      "expected": { "value": true, "variant": "on", "reason": "DEFAULT" } },
+    { "name": "permanent flag is forced off where it is forbidden", "flag": "demo_pages", "environment": "production",
+      "expected": { "value": false, "variant": "off", "reason": "DISABLED" } },
+    { "name": "permanent flag ignores a pin where it is forbidden", "flag": "demo_pages", "environment": "production",
+      "env_vars": { "STANDARD_FLAGS_DEMO_PAGES": "on" },
+      "expected": { "value": false, "variant": "off", "reason": "DISABLED" } },
+    { "name": "permanent flag can be pinned off where it is allowed", "flag": "demo_pages", "environment": "development",
+      "env_vars": { "STANDARD_FLAGS_DEMO_PAGES": "off" },
+      "expected": { "value": false, "variant": "off", "reason": "ENV_PIN", "source_env_var": "STANDARD_FLAGS_DEMO_PAGES" } },
+    { "name": "permanent flag without a default is off", "flag": "setup_screens", "environment": "production",
+      "expected": { "value": false, "variant": "off", "reason": "DEFAULT" } },
+    { "name": "permanent flag can be pinned on", "flag": "setup_screens", "environment": "production",
+      "env_vars": { "STANDARD_FLAGS_SETUP_SCREENS": "true" },
+      "expected": { "value": true, "variant": "on", "reason": "ENV_PIN", "source_env_var": "STANDARD_FLAGS_SETUP_SCREENS" } },
+    { "name": "permanent flag may default on", "flag": "outbound_email", "environment": "production",
+      "expected": { "value": true, "variant": "on", "reason": "DEFAULT" } },
+    { "name": "permanent flag honours an inverted legacy name", "flag": "outbound_email", "environment": "staging",
+      "env_vars": { "ACME_EMAIL_DISABLED": "yes" },
+      "expected": { "value": false, "variant": "off", "reason": "ENV_PIN", "source_env_var": "ACME_EMAIL_DISABLED" } }
+  ]
+}

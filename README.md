@@ -81,6 +81,9 @@ StandardFlags.define do
   flag :demo_data, owner: "platform", remove_by: "2027-06-01", final: false,
        forbidden_in: :production
 
+  flag :demo_pages, owner: "platform", permanent: true,
+       default: { development: true, staging: true }, forbidden_in: :production
+
   tombstone :manual_entry, removed: "2026-12-01"
 end
 ```
@@ -89,7 +92,7 @@ end
 
 | Kind | Values | Default | Use for |
 |------|--------|---------|---------|
-| `flag` | on / off | off | Temporary release flags. `remove_by:` and `final:` are required. |
+| `flag` | on / off | off | Temporary release flags: `remove_by:` and `final:` are required. With `permanent: true`, a standing switch instead (see below). |
 | `kill_switch` | on / off | on, fails open | Permanent switches that turn a feature off in an emergency. |
 | `mode` | declared values | first value | Staged rollouts. Presets: `:sensor` (off/sensor/on), `:cutover` (off/allowlist/all), `:shadow` (off/shadow/enforce); or `values:`. |
 | `experiment` | declared variants | first variant | Experiments. In 0.1.0 an experiment always resolves to its first variant (list `control` first) unless pinned by ENV. |
@@ -110,11 +113,40 @@ end
 | `expose:` | `{ audience => wire_name }`, or a list of audiences to use the key. Default: not exposed. |
 | `unit:` | The unit the flag targets. Carried in the context now; used by targeting later. |
 | `remove_by:`, `final:` | On `flag`: the date it should be gone, and the value it settles on. |
+| `permanent:` | On `flag`: `true` for a standing switch with no `remove_by:`/`final:`. |
 
 The registry is validated when it loads. `StandardFlags::DefinitionError` is
 raised for a reused tombstoned key, a missing owner, a `flag` without
-`remove_by:`/`final:`, a default outside a mode's values, the same wire name
+`remove_by:`/`final:` (or a `permanent: true` flag with either), a default outside a mode's values, the same wire name
 used twice for one audience, an undeclared unit, or any unknown attribute.
+
+### Permanent flags
+
+Some switches are never meant to be removed: environment permissions such as
+demo pages, setup screens, or permission to send real messages outside
+production. Declare them as a `flag` with `permanent: true`:
+
+```ruby
+flag :demo_pages, owner: "platform", permanent: true,
+     default: { development: true, staging: true }, forbidden_in: :production
+flag :outbound_email, owner: "platform", permanent: true, default: true
+```
+
+A permanent flag:
+
+- takes no `remove_by:` or `final:`; declaring either raises
+  `DefinitionError`;
+- defaults off like any `flag`, and may default on, everywhere or per
+  environment;
+- evaluates exactly like any other flag: guards, ENV pins and legacy names
+  all apply;
+- never appears in `flags:stale` or the health check's stale warnings;
+- shows `permanent` in the `remove_by` column of `flags:list`,
+  `permanent: true` in `StandardFlags::Diagnostics.report`, and
+  `"permanent": true` in the manifest.
+
+Use a `kill_switch` instead when the switch is on by default and exists to
+turn a feature off in an emergency.
 
 **Keys are immutable and never reused.** An old key brought back for new
 work can wake up code that was meant to be dead. Remove a flag by replacing
@@ -192,6 +224,12 @@ answers. Gates are never OR'd together.
 
 Runtime rules arrive between 3 and 4, so an ENV pin keeps beating any
 database rule and keeps working with the database down.
+
+**Test overrides beat guards.** Layer 1 answers before layer 2, so
+`with_flag(:demo_pages, true)` turns a `forbidden_in: :production` flag on
+even in production. That is what you want when testing the feature itself,
+but it means a spec cannot prove a guard with `with_flag`. Use a real ENV pin
+instead; see [Testing a guard](#testing-a-guard).
 
 ## Environment variables
 
@@ -275,8 +313,33 @@ A JSON request for a disabled flag gets one JSON:API error:
 `meta.feature` is the flag's wire name for `config.default_audience`
 (`:web`), or the key when it has none. `error: :not_found` answers 404 with
 no meta. Other formats get the bare status. A mode counts as enabled once it
-is past its first value. Replace the response with
+is past its first value. Replace the response everywhere with
 `config.controller_responder = ->(controller, denial) { ... }`.
+
+To keep an endpoint's existing error contract, give one guard its own
+responder with `with:`. It overrides `config.controller_responder` for that
+guard only:
+
+```ruby
+class Api::ReportsController < ApplicationController
+  # A callable takes (controller, denial).
+  requires_flag :new_reports,
+                with: ->(c, denial) { c.render json: { error_code: "FEATURE_OFF" }, status: 422 }
+
+  # A Symbol names a controller method that takes (denial).
+  requires_flag :report_exports, with: :render_api_error
+
+  private
+
+  def render_api_error(denial)
+    render json: ApiError.new(:unavailable, feature: denial.feature), status: denial.status
+  end
+end
+```
+
+The denial carries `key`, `error`, `status` (from `error:`/`status:`),
+`feature` and `body` (the default JSON:API document). The responder must
+render or redirect so the action doesn't run.
 
 ```ruby
 class ReplyJob < ApplicationJob
@@ -289,6 +352,33 @@ end
 
 With `retry: true` a disabled flag raises `StandardFlags::Disabled` so
 `retry_on` can reschedule. Without it the job is discarded unrun.
+
+Jobs that already `retry_on` (or `discard_on`) their own exception can
+raise it instead with `error:`, a class or a proc:
+
+```ruby
+class SyncJob < ApplicationJob
+  include StandardFlags::Job
+
+  retry_on UpstreamUnavailable, wait: :polynomially_longer, attempts: 10
+
+  requires_flag :partner_sync, error: UpstreamUnavailable
+  # or build the exception in the job instance; the proc may take the key:
+  requires_flag :partner_sync, error: ->(key) { UpstreamUnavailable.new("#{key} off for #{arguments.first}") }
+end
+```
+
+A class is raised with the message `flag :<key> is disabled`. A proc runs in
+the job instance and returns an exception or an exception class. How the
+options combine:
+
+| Options | When the flag is off |
+|---------|----------------------|
+| (none), or `retry: false` | The job is discarded unrun. |
+| `retry: true` | Raises `StandardFlags::Disabled`. |
+| `error: SomeError` | Raises `SomeError`; the job's own `retry_on`/`discard_on` for it applies, and without one the job fails like any other error. |
+| `error:` with `retry: true` | Same as `error:` alone. |
+| `error:` with `retry: false` | `ArgumentError` at declaration: `error:` always raises, so it cannot also discard. |
 
 ## Client payload
 
@@ -319,10 +409,10 @@ end
 
 | Task | What it does |
 |------|--------------|
-| `bin/rails flags:list` | Every flag with its value, reason, deciding env var and remove_by. |
-| `bin/rails flags:stale` | Flags past `remove_by`, with the `final:` value to keep. |
+| `bin/rails flags:list` | Every flag with its value, reason, deciding env var and remove_by (`permanent` for permanent flags). |
+| `bin/rails flags:stale` | Flags past `remove_by`, with the `final:` value to keep. Permanent flags never appear. |
 | `bin/rails flags:refs` | Scans `config.refs_paths` (default `app lib config`) for `on?(:k`, `off?(:k`, `mode(:k`, `variant(:k`, `evaluate(:k`, `requires_flag :k` and string keys. Exits non-zero for undeclared or tombstoned keys; warns for declared flags nothing reads. Run it in CI. |
-| `bin/rails standard_flags:manifest` | Writes `config/flags.manifest.json`: keys, wire names, kinds, values, audiences and defaults, deterministically. Commit it. |
+| `bin/rails standard_flags:manifest` | Writes `config/flags.manifest.json`: keys, wire names, kinds, values, audiences and defaults (and `permanent` on entries of kind `flag`), deterministically. Commit it. |
 | `bin/rails standard_flags:typescript` | Writes a `.d.ts` with a `Features` interface per audience (`WebFeatures`, `MobileFeatures`, …) keyed by wire name. |
 
 ## Observability
@@ -363,7 +453,8 @@ by default. There is no dependency on standard_health unless you reference
 the check.
 
 `StandardFlags::Diagnostics.report` returns the same picture as a hash for a
-diagnostics page: each flag's value, reason and deciding variable, plus
+diagnostics page: each flag's value, reason, deciding variable and whether
+it is permanent, plus
 forbidden, rejected, legacy and unknown pins and stale flags. It contains
 variable names only, never raw environment values.
 
@@ -385,10 +476,35 @@ it "shows the new checkout", flags: { new_checkout: true } do
 end
 ```
 
-Overrides are the first evaluation layer, so they beat ENV pins and defaults
-without touching `ENV`. Unknown keys, wrong kinds and undeclared values
-raise; unknown keys raise on read too (strict mode); everything resets after
-each example.
+Overrides are the first evaluation layer, so they beat guards, ENV pins and
+defaults without touching `ENV`. Unknown keys, wrong kinds and undeclared
+values raise; unknown keys raise on read too (strict mode); everything resets
+after each example.
+
+### Testing a guard
+
+Because overrides beat `forbidden_in:` guards (layer 1 before layer 2), a
+spec that uses `with_flag` to prove a guard passes for the wrong reason: the
+override turns the flag on and the guard never runs. Prove a guard with a
+real ENV pin and an explicit environment:
+
+```ruby
+it "never turns demo pages on in production, even when pinned" do
+  ENV["STANDARD_FLAGS_DEMO_PAGES"] = "on"
+  production = StandardFlags::Context.new(env: "production")
+
+  expect(StandardFlags.evaluate(:demo_pages, for: production))
+    .to have_attributes(value: false, reason: "DISABLED")
+ensure
+  ENV.delete("STANDARD_FLAGS_DEMO_PAGES")
+end
+```
+
+Pins are read from `config.env_source`, which is `ENV` unless you set it; a
+spec may point it at a Hash instead (`StandardFlags.config.env_source =
+{ "STANDARD_FLAGS_DEMO_PAGES" => "on" }`, and set it back to `ENV` after
+the example). Either
+way the pin goes through the same parser and guard as in production.
 
 ## Conformance suite
 

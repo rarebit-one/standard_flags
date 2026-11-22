@@ -22,6 +22,9 @@ Dummy::Application.routes.draw do
   get "/exports" => "exports#index"
   get "/assistant" => "assistant#index"
   get "/features" => "features#index"
+  get "/legacy/api" => "legacy#api"
+  get "/legacy/page" => "legacy#page"
+  get "/legacy/plain" => "legacy#plain"
 end
 
 require_relative "dummy_controllers"

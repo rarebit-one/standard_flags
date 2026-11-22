@@ -18,7 +18,7 @@ module StandardFlags
 
     COMMON_ATTRIBUTES = %i[owner description default env inverted forbidden_in fail expose unit].freeze
     ATTRIBUTES = {
-      flag: COMMON_ATTRIBUTES + %i[remove_by final],
+      flag: COMMON_ATTRIBUTES + %i[remove_by final permanent],
       kill_switch: COMMON_ATTRIBUTES,
       mode: COMMON_ATTRIBUTES + %i[preset values],
       experiment: COMMON_ATTRIBUTES + %i[variants],
@@ -30,7 +30,7 @@ module StandardFlags
     WIRE_FORMAT = /\A[A-Za-z][A-Za-z0-9_]*\z/
 
     attr_reader :key, :kind, :owner, :description, :env, :inverted, :forbidden_in,
-                :expose, :unit, :remove_by, :final, :values, :variants
+                :expose, :unit, :remove_by, :final, :values, :variants, :permanent
 
     def initialize(kind, key, attributes)
       @kind = kind.to_sym
@@ -57,6 +57,12 @@ module StandardFlags
 
     def kill_switch?
       kind == :kill_switch
+    end
+
+    # A `flag` declared `permanent: true`: a standing switch (an environment
+    # permission, say) with no remove_by: or final:, never stale.
+    def permanent?
+      permanent
     end
 
     # Every value this flag can take, in declared order.
@@ -124,6 +130,7 @@ module StandardFlags
       expose.keys
     end
 
+    # Permanent flags have no remove_by:, so they are never stale.
     def stale?(today = Date.today)
       !remove_by.nil? && remove_by < today
     end
@@ -164,6 +171,7 @@ module StandardFlags
       @default = normalize_default(attributes[:default])
       @fail = attributes.key?(:fail) ? coerce(attributes[:fail], :fail) : nil
       @final = attributes.key?(:final) ? coerce(attributes[:final], :final) : nil
+      @permanent = attributes.fetch(:permanent, false)
     end
 
     def validate!
@@ -176,8 +184,16 @@ module StandardFlags
     def validate_flag_lifecycle!
       return unless kind == :flag
 
-      fail!("is missing remove_by: (release flags are temporary)") if remove_by.nil?
+      fail!("permanent: must be true or false") unless [ true, false ].include?(permanent)
+      return validate_permanent! if permanent
+
+      fail!("is missing remove_by: (release flags are temporary; declare permanent: true for a standing switch)") if remove_by.nil?
       fail!("is missing final: (the value it settles on when removed)") if @final.nil?
+    end
+
+    def validate_permanent!
+      fail!("is permanent: and cannot have remove_by:") unless remove_by.nil?
+      fail!("is permanent: and cannot have final:") unless @final.nil?
     end
 
     def validate_env!

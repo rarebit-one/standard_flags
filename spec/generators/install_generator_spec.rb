@@ -52,7 +52,7 @@ RSpec.describe StandardFlags::Generators::InstallGenerator, type: :generator do
     continuation = /^  #(?=\s{2,}\S)/
     File.write(registry_path, File.read(registry_path).gsub(code, "  ").gsub(continuation, "  "))
     load registry_path
-    expect(StandardFlags.registry.keys).to match_array(%i[new_checkout ai_assistant strict_gates home_hero legacy_form_auth demo_data])
+    expect(StandardFlags.registry.keys).to match_array(%i[new_checkout ai_assistant strict_gates home_hero legacy_form_auth demo_data demo_pages])
   end
 
   it "skips existing files and overwrites with --force" do
