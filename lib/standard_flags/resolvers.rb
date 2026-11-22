@@ -5,15 +5,16 @@ module StandardFlags
   #   1. TestOverride — `with_flag` and friends; inert outside tests.
   #   2. Guard        — `forbidden_in:` forces the off value.
   #   3. EnvPin       — STANDARD_FLAGS_<KEY>, then legacy `env:` names.
-  #   4. CodeDefault  — the registry default for the current environment.
+  #   4. RuntimeRule  — the flag's stored rule, when runtime rules are on.
+  #   5. CodeDefault  — the registry default for the current environment.
   #
   # Test overrides beat guards, so a spec proving a `forbidden_in:` guard
   # must use a real ENV pin, not `with_flag`.
   #
-  # Runtime rules (deny, allow, cohorts, percentages) slot in between 3 and 4,
-  # so an ENV pin keeps beating the database and works with it down.
+  # Runtime rules sit below the pin, so an ENV pin keeps beating the
+  # database and works with it down. See Runtime::Resolver.
   module Resolvers
-    Request = Data.define(:definition, :context, :env_name, :env)
+    Request = Data.define(:registry, :definition, :context, :env_name, :env)
 
     class TestOverride
       def call(request)
@@ -96,7 +97,7 @@ module StandardFlags
       TestOverride.new,
       Guard.new,
       EnvPin.new,
-      # Runtime rules go here.
+      Runtime::Resolver.new,
       CodeDefault.new
     ].freeze
   end

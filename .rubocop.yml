@@ -27,15 +27,23 @@ RSpec/VerifiedDoubles:
 RSpec/DescribeClass:
   Exclude:
     - spec/conformance_spec.rb
+    - spec/runtime_conformance_spec.rb
+    - spec/db/**/*
     - spec/integration/**/*
     - spec/standard_flags/notifiers_spec.rb
     - spec/standard_flags/read_api_spec.rb
     - spec/standard_flags/resolution_spec.rb
+    - spec/standard_flags/error_reporter_spec.rb
+    - spec/standard_flags/runtime/diagnostics_spec.rb
+    - spec/standard_flags/runtime/query_cost_spec.rb
+    - spec/standard_flags/runtime/runtime_off_spec.rb
+    - spec/standard_flags/runtime/test_helpers_spec.rb
 
-# The conformance spec generates one example per fixture case at load time.
+# The conformance specs generate one example per fixture case at load time.
 RSpec/LeakyLocalVariable:
   Exclude:
     - spec/conformance_spec.rb
+    - spec/runtime_conformance_spec.rb
 
 Style/FrozenStringLiteralComment:
   Enabled: false

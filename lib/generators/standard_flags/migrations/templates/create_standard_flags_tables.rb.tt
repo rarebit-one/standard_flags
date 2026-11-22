@@ -1,0 +1,75 @@
+# Runtime rules for StandardFlags. All four tables are new, so every index and
+# constraint is created inside create_table.
+class CreateStandardFlagsTables < ActiveRecord::Migration<%= migration_version %>
+  def change
+    # One row per flag, created by the first operation on it and never deleted.
+    create_table :standard_flags_rules<%= table_options %> do |t|
+      t.string :key, null: false, index: { unique: true }
+      t.string :status, null: false, default: "draft"
+      t.integer :hash_version, null: false, default: 2
+      t.string :salt, null: false
+      t.integer :percentage_bps
+      t.string :rollout_value
+      t.jsonb :variant_weights, null: false, default: {}
+      t.string :fallthrough_value
+      t.string :stop_value
+      t.jsonb :conditions, null: false, default: {}
+      t.jsonb :cohorts, null: false, default: []
+      t.integer :member_count, null: false, default: 0
+      t.integer :lock_version, null: false, default: 0
+      t.datetime :full_since
+      t.datetime :last_evaluated_at
+      t.timestamps
+
+      t.check_constraint "status IN ('draft', 'running', 'paused', 'stopped')", name: "standard_flags_rules_status"
+      t.check_constraint "percentage_bps IS NULL OR (percentage_bps >= 0 AND percentage_bps <= 10000)",
+        name: "standard_flags_rules_percentage_bps"
+    end
+
+    # Named member lists that any number of flags can attach. One unit each.
+    create_table :standard_flags_cohorts<%= table_options %> do |t|
+      t.string :key, null: false, index: { unique: true }
+      t.string :name
+      t.text :description
+      t.string :unit, null: false
+      t.integer :member_count, null: false, default: 0
+      t.datetime :archived_at
+      t.timestamps
+    end
+
+    # A unit's membership of exactly one rule or one cohort, with the value it
+    # serves. Removed rows are kept (removed_at) so they can be restored.
+    create_table :standard_flags_memberships<%= table_options %> do |t|
+      t.references :rule, type: <%= foreign_key_type %>, index: false,
+        foreign_key: { to_table: :standard_flags_rules }
+      t.references :cohort, type: <%= foreign_key_type %>, index: false,
+        foreign_key: { to_table: :standard_flags_cohorts }
+      t.string :unit, null: false
+      t.string :unit_key, null: false
+      t.string :value, null: false
+      t.datetime :expires_at
+      t.datetime :removed_at
+      t.timestamps
+
+      t.check_constraint "(rule_id IS NULL) <> (cohort_id IS NULL)", name: "standard_flags_memberships_one_owner"
+      t.index %i[rule_id unit unit_key], unique: true, where: "removed_at IS NULL",
+        name: "index_standard_flags_memberships_live_rule"
+      t.index %i[cohort_id unit unit_key], unique: true, where: "removed_at IS NULL",
+        name: "index_standard_flags_memberships_live_cohort"
+      t.index %i[unit unit_key], where: "removed_at IS NULL",
+        name: "index_standard_flags_memberships_live_lookup"
+    end
+
+    # A single row. Every write increments revision, and each process reloads
+    # its rules when it sees the revision move.
+    create_table :standard_flags_state<%= table_options %> do |t|
+      t.bigint :revision, null: false, default: 0
+    end
+
+    up_only do
+      state = Class.new(ActiveRecord::Base) { self.table_name = "standard_flags_state" }
+      state.reset_column_information
+      state.insert_all!([ { revision: 0 } ])
+    end
+  end
+end

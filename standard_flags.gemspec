@@ -31,8 +31,15 @@ Gem::Specification.new do |spec|
   #                    from a host controller.
   #   activejob      — StandardFlags::Job is autoloaded on first reference from a
   #                    host job.
+  #   activerecord   — the runtime-rule store and its models are required only
+  #                    when a host sets config.runtime_rules = true (and
+  #                    configures no other store); with it off, nothing in the
+  #                    gem loads ActiveRecord.
+  #   pg             — runtime rules are Postgres-only (jsonb), through the
+  #                    host's own adapter.
   #   sentry-ruby    — the Sentry and Metrics subscribers no-op without it.
-  #   standard_health — StandardFlags::HealthCheck is only defined when it is.
+  #   standard_health — StandardFlags::HealthCheck is only defined when it is,
+  #                    and the 0.9+ contribution hook only runs when it loads.
 
   spec.add_development_dependency "brakeman"
   spec.add_development_dependency "bundler-audit"

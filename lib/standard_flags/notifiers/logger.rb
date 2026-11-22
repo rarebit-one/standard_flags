@@ -33,7 +33,19 @@ module StandardFlags
           [ :info, "sensor :#{payload[:key]} (#{payload[:mode]}) observed#{" #{payload[:error_class]}" if payload[:error_class]}" ]
         when "evaluate"
           [ :debug, "evaluated :#{payload[:key]} = #{payload[:value].inspect} (#{payload[:reason]})" ]
+        when "runtime_stale" then [ :warn, stale_message(payload) ]
+        when "runtime_refresh"
+          [ :debug, "loaded runtime rules at revision #{payload[:revision]} (#{payload[:rules]} rules)" ]
+        when "rule_invalid"
+          [ :warn, "runtime rule for :#{payload[:key]} #{payload[:error]}; serving its fail value" ]
+        when "targeting_key_missing"
+          [ :debug, "runtime rule for :#{payload[:key]} needs a :#{payload[:unit]} key and the context has none" ]
         end
+      end
+
+      def stale_message(payload)
+        serving = payload[:loaded] ? "revision #{payload[:revision]} (#{payload[:age]}s old)" : "code defaults (never loaded)"
+        "runtime rules could not refresh (#{payload[:error_class]}); serving #{serving}"
       end
 
       def legacy_message(payload)

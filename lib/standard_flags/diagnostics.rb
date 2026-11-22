@@ -24,6 +24,7 @@ module StandardFlags
         stale: rows.select { |r| r[:stale] }.map { |r| { flag: r[:key], remove_by: r[:remove_by] } },
         unknown_env_vars: unknown_env_vars(registry, env)
       }
+      report[:runtime] = Runtime.status(registry: registry) if Runtime.enabled?
       report.merge(status: status(report))
     end
 
@@ -32,13 +33,33 @@ module StandardFlags
       report[:rejected_pins].map { |p| "#{p[:env_var]} for :#{p[:flag]} is not a valid value (ignored)" } +
         report[:legacy_env_vars].map { |p| "#{p[:env_var]} for :#{p[:flag]} is deprecated; rename to #{p[:canonical]}" } +
         report[:stale].map { |s| ":#{s[:flag]} is past remove_by #{s[:remove_by]}" } +
-        report[:unknown_env_vars].map { |var| "#{var} does not match a declared flag" }
+        report[:unknown_env_vars].map { |var| "#{var} does not match a declared flag" } +
+        runtime_warnings(report[:runtime])
+    end
+
+    # Runtime rules are on but their tables (or store) aren't there.
+    def runtime_unavailable?(report)
+      runtime = report[:runtime]
+      !runtime.nil? && !runtime[:ready]
+    end
+
+    def runtime_warnings(runtime)
+      return [] if runtime.nil? || !runtime[:ready]
+
+      warnings = []
+      if runtime[:stale]
+        serving = runtime[:loaded] ? "revision #{runtime[:revision]}, #{runtime[:age]}s old" : "code defaults"
+        warnings << "runtime rules are stale: the last refresh failed (serving #{serving})"
+      end
+      warnings + runtime[:rules].select { |rule| rule[:orphan] }.map do |rule|
+        "runtime rule for :#{rule[:key]} has no declared flag (#{rule[:orphan]})"
+      end
     end
 
     def row(registry, definition, env, environment, today)
       evaluation = Evaluator.evaluate(registry, definition.key, Context.new(env: environment))
       scan = EnvPin.scan(definition, env)
-      {
+      row = {
         key: definition.key,
         kind: definition.kind,
         owner: definition.owner,
@@ -53,6 +74,8 @@ module StandardFlags
         scan: scan,
         forbidden_pin: forbidden_pin(definition, scan, environment)
       }
+      row[:rule_status] = Runtime.snapshot.rule(definition.key)&.status if Runtime.enabled?
+      row
     end
 
     # The variable pinning a `forbidden_in` flag on here, if any.
@@ -86,7 +109,7 @@ module StandardFlags
     end
 
     def status(report)
-      return :fail if report[:forbidden_pins].any?
+      return :fail if report[:forbidden_pins].any? || runtime_unavailable?(report)
       return :warn if warnings(report).any?
 
       :ok

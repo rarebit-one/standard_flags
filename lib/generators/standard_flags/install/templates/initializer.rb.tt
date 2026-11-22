@@ -23,6 +23,15 @@
 #   # config.manifest_path = "config/flags.manifest.json"
 #   # config.typescript_path = "app/javascript/types/standard_flags.d.ts"
 #
+#   # Runtime rules: per-flag rules stored in this app's database, read
+#   # between the ENV pin and the code default. Needs the migration from
+#   # bin/rails g standard_flags:migrations. Off by default.
+#   # config.runtime_rules = false
+#   # Seconds between checks of the stored revision (one query each).
+#   # config.refresh_interval = 5
+#   # Answers segment conditions: ->(segment_name, context) { true/false }.
+#   # config.segment_resolver = ->(name, context) { context.account&.in_segment?(name) }
+#
 #   # Whose wire name requires_flag reports in meta.feature.
 #   # config.default_audience = :web
 #

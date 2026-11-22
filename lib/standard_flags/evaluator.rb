@@ -21,6 +21,7 @@ module StandardFlags
 
     def resolve(registry, definition, context)
       request = Resolvers::Request.new(
+        registry: registry,
         definition: definition,
         context: context,
         env_name: (context.env || registry.current_env).to_s,

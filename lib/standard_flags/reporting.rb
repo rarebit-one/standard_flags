@@ -25,10 +25,13 @@ module StandardFlags
         @mutex.synchronize { @seen.clear }
       end
 
-      # Reports a handled warning through Rails.error, which hosts wire to
-      # their error tracker.
+      # Reports a handled warning through `config.error_reporter` when one is
+      # set, else through Rails.error, which hosts wire to their error
+      # tracker. A custom reporter that raises falls back to Rails.error.
       def report(exception, **context)
         exception.set_backtrace(caller) if exception.backtrace.nil?
+        return if custom_report(exception, context)
+
         reporter&.report(exception, handled: true, severity: :warning, context: context, source: SOURCE)
       rescue StandardError => e
         warn "[standard_flags] error report failed: #{e.class}: #{e.message}"
@@ -43,6 +46,18 @@ module StandardFlags
       end
 
       private
+
+      # true when a custom reporter took the report.
+      def custom_report(exception, context)
+        custom = StandardFlags.config.error_reporter
+        return false unless custom
+
+        custom.call(exception, context)
+        true
+      rescue StandardError => e
+        warn "[standard_flags] config.error_reporter failed (#{e.class}); reporting through Rails.error"
+        false
+      end
 
       def reporter
         if defined?(::Rails) && ::Rails.respond_to?(:error)

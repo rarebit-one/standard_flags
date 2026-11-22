@@ -1,11 +1,13 @@
 module StandardFlags
-  # Library-only engine: no routes, no models. It wires three things into the
+  # Library-only engine: no routes, and no models in app/ (the runtime-rule
+  # models load only when runtime rules are on). It wires these into the
   # host:
   #
   # * an executor hook that opens a fresh memo per unit of work (requests,
   #   jobs, mailers, console reloads), instead of Rack middleware;
   # * config/flags.rb, loaded on boot and on every code reload;
-  # * the Logger / Sentry / Metrics subscribers, once initializers have run.
+  # * the Logger / Sentry / Metrics subscribers, once initializers have run;
+  # * the runtime-rule store, after boot, when runtime rules are on.
   #
   # Rake tasks need no `rake_tasks` block: Rails::Engine already loads
   # lib/tasks/**/*.rake, and loading the file again would give every task a
@@ -23,6 +25,12 @@ module StandardFlags
 
     config.to_prepare do
       StandardFlags.load_registry!
+    end
+
+    # Loads the ActiveRecord store (and ActiveRecord) at boot, but only when
+    # the host has turned runtime rules on.
+    config.after_initialize do
+      StandardFlags::Runtime.boot!
     end
   end
 end

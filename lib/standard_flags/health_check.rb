@@ -8,9 +8,11 @@ module StandardFlags
   #     c.register_check :flags, StandardFlags::HealthCheck
   #   end
   #
-  # * Fails when a `forbidden_in` flag is pinned on in this environment.
+  # * Fails when a `forbidden_in` flag is pinned on in this environment, or
+  #   when runtime rules are on and their tables are missing.
   # * Warns on unparseable pins, legacy env names in use (deprecated), flags
-  #   past remove_by, and STANDARD_FLAGS_* variables that match no flag.
+  #   past remove_by, STANDARD_FLAGS_* variables that match no flag, a stale
+  #   runtime-rule snapshot, and rules for undeclared or tombstoned keys.
   #
   # standard_health has no warning status, so warnings ride on the row as
   # `warnings:` and the check stays :ok. Pass `warn_as: :fail` to let them
@@ -18,6 +20,7 @@ module StandardFlags
   # to look, not to pull an instance out of rotation.
   class HealthCheck < ::StandardHealth::Check
     VIOLATION_LABEL = "StandardFlags::ForbiddenPin".freeze
+    RUNTIME_LABEL = "StandardFlags::RuntimeUnavailable".freeze
     WARNING_LABEL = "StandardFlags::FlagWarning".freeze
 
     attr_reader :warn_as
@@ -38,6 +41,11 @@ module StandardFlags
       unless forbidden.empty?
         names = forbidden.map { |p| "#{p[:flag]} (#{p[:env_var]})" }.join(", ")
         return timing.merge(status: :fail, error: "forbidden flags pinned on: #{names}", error_class: VIOLATION_LABEL)
+      end
+      if Diagnostics.runtime_unavailable?(report)
+        return timing.merge(status: :fail, error: "runtime rules are on but their tables are missing; run the " \
+                                                  "standard_flags:migrations generator and migrate",
+                            error_class: RUNTIME_LABEL)
       end
 
       warnings = Diagnostics.warnings(report)

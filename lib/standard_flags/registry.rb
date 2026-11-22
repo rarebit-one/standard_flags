@@ -4,7 +4,27 @@ module StandardFlags
   # The flags an app declares in config/flags.rb. Immutable once built;
   # `StandardFlags.define` builds a new one and swaps it in.
   class Registry
-    Unit = Data.define(:name, :resolver)
+    # `key` is the declared `key:` callable, or nil for the default.
+    Unit = Data.define(:name, :resolver, :key) do
+      # The unit key for one actor (a record or a raw key): the `key:`
+      # callable's answer, else `id` for objects that have one, else the value
+      # itself, as a String. Blank means missing.
+      def key_for(actor)
+        return nil if actor.nil?
+
+        raw = if key then key.call(actor)
+        elsif actor.respond_to?(:id) then actor.id
+        else actor
+        end
+        text = raw&.to_s
+        text unless text.nil? || text.strip.empty?
+      end
+
+      # The unit key for a context, through `from:` / `resolver:`.
+      def key_from(context)
+        key_for(resolver.call(context))
+      end
+    end
     Tombstone = Data.define(:key, :removed)
 
     attr_reader :tombstones, :units
@@ -91,14 +111,16 @@ module StandardFlags
       end
 
       # `from:` is a lambda over the Context; `resolver:` is any object with
-      # `call(context)`. Units are carried in the context now and used for
-      # targeting once runtime rules arrive.
-      def unit(name, from: nil, resolver: nil)
+      # `call(context)`. Runtime rules target a unit by its key: `key:` turns
+      # an actor into one (normalising a phone number, say); the default is
+      # `record.id.to_s`, or the value itself for anything without an `id`.
+      def unit(name, from: nil, resolver: nil, key: nil)
         callable = from || resolver
         raise DefinitionError, "unit :#{name} needs from: or resolver:" unless callable.respond_to?(:call)
         raise DefinitionError, "unit :#{name} is declared twice" if @units.key?(name.to_sym)
+        raise DefinitionError, "unit :#{name} key: must respond to call(actor)" unless key.nil? || key.respond_to?(:call)
 
-        @units[name.to_sym] = Unit.new(name: name.to_sym, resolver: callable)
+        @units[name.to_sym] = Unit.new(name: name.to_sym, resolver: callable, key: key)
       end
 
       Definition::KINDS.each do |kind|
