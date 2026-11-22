@@ -1,0 +1,43 @@
+# StandardFlags runtime settings. Flags themselves live in config/flags.rb.
+#
+# StandardFlags.configure do |config|
+#   # Unknown keys and kind mismatches raise when strict. Defaults to true
+#   # everywhere except a production Rails process, where reads fail safe.
+#   # config.strict = true
+#
+#   # Fraction of evaluations that emit evaluate.standard_flags (0.0..1.0).
+#   # config.evaluate_sample_rate = 0.0
+#
+#   # Rejected and forbidden pins already go to Rails.error. Turn this on only
+#   # if Rails.error isn't wired to Sentry, or each warning arrives twice.
+#   # config.sentry_enabled = false
+#
+#   # Sentry::Metrics counters per event, when sentry-ruby is loaded.
+#   # config.metrics_enabled = true
+#   # config.metric_prefix = "standard_flags"
+#
+#   # Where flags:refs looks for flag reads.
+#   # config.refs_paths = %w[app lib config]
+#
+#   # Outputs of standard_flags:manifest and standard_flags:typescript.
+#   # config.manifest_path = "config/flags.manifest.json"
+#   # config.typescript_path = "app/javascript/types/standard_flags.d.ts"
+#
+#   # Whose wire name requires_flag reports in meta.feature.
+#   # config.default_audience = :web
+#
+#   # Replace the requires_flag response (denial has key, error, status,
+#   # feature and body).
+#   # config.controller_responder = ->(controller, denial) do
+#   #   controller.render json: denial.body, status: denial.status
+#   # end
+#
+#   # Your own subscriber for every *.standard_flags event.
+#   # config.add_notifier(->(name, payload) { MyMetrics.increment(name, tags: { flag: payload[:key] }) })
+# end
+#
+# Opt-in health check (needs standard_health):
+#
+# StandardHealth.configure do |c|
+#   c.register_check :flags, StandardFlags::HealthCheck
+# end

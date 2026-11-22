@@ -1,0 +1,29 @@
+name: Weekly Maintenance
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: weekly-maintenance-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  security-events: read
+
+jobs:
+  maintenance:
+    uses: rarebit-one/.github/.github/workflows/reusable-weekly-maintenance.yml@v3 # tracks .github main; SHA pins freeze the setup-ruby version list
+    with:
+      stack: ruby-gem
+      lint-commands: |
+        bundle exec rubocop
+      test-commands: |
+        bundle exec rspec
+    secrets:
+      claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
