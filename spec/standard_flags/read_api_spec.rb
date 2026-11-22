@@ -93,6 +93,16 @@ RSpec.describe "read API" do
       expect(a.cache_key).not_to eq(c.cache_key)
     end
 
+    it "keys the memo by client attributes" do
+      android = described_class.new(client: { platform: "android", version: "1.4.0" })
+      same = described_class.new(client: { "version" => "1.4.0", "platform" => "android" })
+      older = described_class.new(client: { platform: "android", version: "1.3.0" })
+      ios = described_class.new(client: { platform: "ios", version: "1.4.0" })
+
+      expect(android.cache_key).to eq(same.cache_key)
+      expect([ older, ios, described_class.new ].map(&:cache_key)).not_to include(android.cache_key)
+    end
+
     it "carries client attributes" do
       context = described_class.new(client: { "platform" => "android", version: "1.4.0" })
       expect(context.client).to eq(platform: "android", version: "1.4.0")

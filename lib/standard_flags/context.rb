@@ -8,6 +8,9 @@ module StandardFlags
   #   StandardFlags.on?(:new_checkout, for: { account: account, organization: org })
   #   StandardFlags.on?(:new_checkout, for: StandardFlags::Context.new(env: "staging"))
   #
+  # The memo key covers env, target, actors and client, so two clients in one
+  # unit of work never share an answer once rules target platform or version.
+  #
   # A unit's `from:` lambda receives the context: actors passed by unit name
   # read as methods (`ctx.account`), and anything else is asked of the single
   # target (`ctx.organization` calls `target.organization`).
@@ -32,7 +35,12 @@ module StandardFlags
       @target = target
       @env = env&.to_s
       @client = client.transform_keys(&:to_sym).freeze
-      @cache_key = [ @env, identity(@target), @actors.sort.map { |unit, actor| [ unit, identity(actor) ] } ].freeze
+      @cache_key = [
+        @env,
+        identity(@target),
+        @actors.sort.map { |unit, actor| [ unit, identity(actor) ] },
+        @client.sort
+      ].freeze
       freeze
     end
 
