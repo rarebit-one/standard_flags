@@ -8,6 +8,7 @@ module StandardFlags
   # tested without booting an app.
   module Tooling
     # `flags:list`: every flag, its value here, and where the value came from.
+    # A permanent flag shows `permanent` in the remove_by column.
     class List
       HEADERS = %w[key kind value reason env_var remove_by].freeze
 
@@ -19,7 +20,7 @@ module StandardFlags
         @registry.definitions.sort_by(&:key).map do |definition|
           evaluation = Evaluator.evaluate(@registry, definition.key, Context.empty)
           [ definition.key.to_s, definition.kind.to_s, evaluation.value.to_s, evaluation.reason,
-            evaluation.source_env_var || "-", definition.remove_by&.iso8601 || "-" ]
+            evaluation.source_env_var || "-", lifecycle(definition) ]
         end
       end
 
@@ -28,10 +29,19 @@ module StandardFlags
         widths = HEADERS.each_index.map { |i| table.map { |row| row[i].length }.max }
         table.map { |row| row.each_with_index.map { |cell, i| cell.ljust(widths[i]) }.join("  ").rstrip }.join("\n")
       end
+
+      private
+
+      def lifecycle(definition)
+        return "permanent" if definition.permanent?
+
+        definition.remove_by&.iso8601 || "-"
+      end
     end
 
     # `flags:stale`: flags past their remove_by date. Each one's `final:`
-    # value says which branch to keep when deleting it.
+    # value says which branch to keep when deleting it. Permanent flags have
+    # no remove_by date, so they never appear.
     class Stale
       def initialize(registry: StandardFlags.registry, today: Date.today)
         @registry = registry
@@ -119,6 +129,7 @@ module StandardFlags
 
     # `standard_flags:manifest`: a deterministic description of the flag set
     # (keys, wire names, kinds, values, audiences, defaults) for client CI.
+    # Entries of kind `flag` also say whether the flag is permanent.
     class Manifest
       VERSION = 1
 
@@ -143,7 +154,7 @@ module StandardFlags
       private
 
       def flag(definition)
-        {
+        entry = {
           "key" => definition.key.to_s,
           "kind" => definition.kind.to_s,
           "type" => definition.boolean? ? "boolean" : "string",
@@ -151,6 +162,8 @@ module StandardFlags
           "default" => default(definition),
           "audiences" => definition.expose.sort.to_h { |audience, name| [ audience.to_s, name ] }
         }
+        entry["permanent"] = definition.permanent? if definition.kind == :flag
+        entry
       end
 
       def default(definition)

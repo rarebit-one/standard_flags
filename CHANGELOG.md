@@ -52,3 +52,31 @@ database tables).
 - **RSpec helpers** (`require "standard_flags/rspec"`): `with_flag`,
   `with_mode`, `with_variant`, `flags:` metadata, automatic reset, strict
   unknown keys.
+- **Permanent flags.** `flag ..., permanent: true` declares a standing
+  switch (an environment permission, say) with no `remove_by:` or `final:`
+  (both rejected when permanent). It may default off or on, is never stale,
+  and shows as permanent in `flags:list`, `Diagnostics.report` and the
+  manifest (`"permanent"` on entries of kind `flag`). Conformance fixture
+  `permanent_flags.json`.
+- **Per-guard controller responder.** `requires_flag :key, with:` takes a
+  callable `(controller, denial)` or a Symbol naming a controller method
+  `(denial)`, and overrides `config.controller_responder` for that guard
+  only.
+- **Job error class.** `StandardFlags::Job` `requires_flag :key, error:`
+  raises an exception class, or what a proc returns, when the flag is off,
+  so jobs that already `retry_on` their own error can adopt the guard.
+  `error:` always raises: `retry: true` alongside it is redundant and
+  `retry: false` is rejected.
+
+### Fixed
+
+- Rake tasks are defined once. The engine no longer loads
+  `lib/tasks/standard_flags.rake` itself on top of Rails::Engine's own
+  `lib/tasks` loading, which gave every task two actions (`flags:list`
+  printed twice).
+
+### Documentation
+
+- README and the resolution-order docs state that test overrides (layer 1)
+  beat `forbidden_in` guards (layer 2), so a spec proving a guard must use a
+  real ENV pin rather than `with_flag`, with the pattern.

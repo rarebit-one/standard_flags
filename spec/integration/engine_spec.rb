@@ -13,12 +13,29 @@ RSpec.describe "engine integration" do
     expect(StandardFlags.load_registry!(nil)).to be_nil
   end
 
-  it "registers the rake tasks" do
-    require "rake"
-    Rake.application = Rake::Application.new
-    Rails.application.load_tasks
-    expect(Rake::Task.tasks.map(&:name)).to include("flags:list", "flags:stale", "flags:refs",
-                                                     "standard_flags:manifest", "standard_flags:typescript")
+  describe "rake tasks loaded through the host app" do
+    let(:tasks) { %w[flags:list flags:stale flags:refs standard_flags:manifest standard_flags:typescript] }
+
+    before do
+      require "rake"
+      Rake.application = Rake::Application.new
+      Rails.application.load_tasks
+    end
+
+    it "registers every task" do
+      expect(Rake::Task.tasks.map(&:name)).to include(*tasks)
+    end
+
+    it "defines each task once, so it runs once" do
+      expect(tasks.to_h { |name| [ name, Rake::Task[name].actions.size ] }).to eq(tasks.to_h { |name| [ name, 1 ] })
+    end
+
+    it "prints flags:list once" do
+      define_flags { kill_switch :ai_assistant, owner: "assistant" }
+      Rake::Task["environment"].clear # the dummy app is already booted
+      expect { Rake::Task["flags:list"].invoke }
+        .to output(satisfy { |out| out.scan("ai_assistant").size == 1 }).to_stdout
+    end
   end
 
   it "is not strict in a production Rails process" do

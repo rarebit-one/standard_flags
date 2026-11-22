@@ -44,3 +44,28 @@ class FeaturesController < DummyBaseController
     render json: { features: standard_flags_payload(:web) }
   end
 end
+
+class LegacyController < DummyBaseController
+  requires_flag :new_reports, only: :api,
+                with: ->(controller, denial) { controller.render json: { error_code: "FEATURE_OFF", flag: denial.key }, status: 422 }
+  requires_flag :new_reports, only: :page, with: :render_unavailable_page
+  requires_flag :new_reports, only: :plain
+
+  def api
+    render plain: "api"
+  end
+
+  def page
+    render plain: "page"
+  end
+
+  def plain
+    render plain: "plain"
+  end
+
+  private
+
+  def render_unavailable_page(denial)
+    render plain: "unavailable: #{denial.feature} (#{denial.status})", status: denial.status
+  end
+end

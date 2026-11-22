@@ -48,6 +48,11 @@ StandardFlags.define do
   # flag :demo_data, owner: "platform", remove_by: "2027-06-01", final: false,
   #      forbidden_in: :production
 
+  # A permanent flag: a standing switch, such as an environment permission,
+  # with no remove_by: or final:. Never stale; may default off or on.
+  # flag :demo_pages, owner: "platform", permanent: true,
+  #      default: { development: true, staging: true }, forbidden_in: :production
+
   # A removed key that can never be declared again.
   # tombstone :manual_entry, removed: "2026-12-01"
 end
