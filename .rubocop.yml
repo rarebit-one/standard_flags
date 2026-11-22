@@ -8,10 +8,12 @@ AllCops:
   TargetRubyVersion: 4.0
   NewCops: enable
   SuggestExtensions: false
+  # Do not exclude ".worktrees/**/*": RuboCop already skips hidden directories,
+  # and a run inside a nested worktree merges this file's AllCops/Exclude
+  # (anchored at this checkout), which would exclude every file in it.
   Exclude:
     - "tmp/**/*"
     - "vendor/**/*"
-    - ".worktrees/**/*"
 
 RSpec/SpecFilePathFormat:
   Enabled: false
