@@ -1,6 +1,8 @@
 class DummyBaseController < ActionController::Base
   include StandardFlags::Controller
 
+  protect_from_forgery with: :exception
+
   private
 
   def standard_flags_context
