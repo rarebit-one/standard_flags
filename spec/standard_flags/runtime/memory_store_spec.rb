@@ -34,6 +34,24 @@ RSpec.describe StandardFlags::Runtime::MemoryStore do
     expect(store.memberships(:phone, [ "+6591234567" ]).first.inspect).not_to include("9123")
   end
 
+  it "runs after_commit blocks once the outermost write returns, and drops those of a rolled-back block" do
+    ran = []
+    store.write do |tx|
+      tx.after_commit { ran << :outer }
+      store.write { |inner| inner.after_commit { ran << :inner } }
+      expect { tx.isolated { tx.after_commit { ran << :undone } and raise IOError } }.to raise_error(IOError)
+      expect(ran).to eq([])
+    end
+    expect(ran).to eq(%i[outer inner])
+    expect { store.write { |tx| tx.after_commit { ran << :never } and raise IOError } }.to raise_error(IOError)
+    expect(ran).to eq(%i[outer inner])
+  end
+
+  it "returns nil from create_cohort when the key is taken" do
+    store.write { |tx| tx.create_cohort("staff", unit: :account) }
+    expect(store.write { |tx| tx.create_cohort("staff", unit: :phone) }).to be_nil
+  end
+
   it "is a Store" do
     expect(StandardFlags::Runtime::Store.new.ready?).to be(true)
     %i[revision load].each { |name| expect { StandardFlags::Runtime::Store.new.public_send(name) }.to raise_error(NotImplementedError) }

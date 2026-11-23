@@ -15,6 +15,10 @@ module StandardFlags
     # costs one failed query per interval, not one per evaluation. A process
     # that has never loaded serves an empty, unloaded snapshot, and every
     # flag falls back to its code default.
+    #
+    # A refresh only reads. A store with no revision yet (nil) never counts
+    # as unchanged, so the rules reload at every check until a write
+    # creates one.
     class Cache
       attr_reader :store
 
@@ -49,6 +53,13 @@ module StandardFlags
         @snapshot
       end
 
+      # Makes the next read check the revision, whatever the interval. The
+      # write path calls it, so the writing process sees its own change.
+      def expire!
+        current = @snapshot
+        @snapshot = current.with(checked_at: nil) if current
+      end
+
       private
 
       def fresh?(snapshot)
@@ -58,7 +69,7 @@ module StandardFlags
       def refresh(current)
         checked_at = now
         revision = store.revision
-        return current.with(checked_at: checked_at, stale: false) if current&.loaded && current.revision == revision
+        return current.with(checked_at: checked_at, stale: false) if current&.loaded && !revision.nil? && current.revision == revision
 
         snapshot = RuleSnapshot.build(store.load, revision: revision, checked_at: checked_at)
         Reporting.instrument(:runtime_refresh, revision: snapshot.revision, rules: snapshot.rules.size)

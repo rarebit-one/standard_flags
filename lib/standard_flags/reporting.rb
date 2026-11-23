@@ -40,9 +40,15 @@ module StandardFlags
       # Emits `<event>.standard_flags`. A failing subscriber must not break
       # the read that triggered it.
       def instrument(event, payload)
-        ActiveSupport::Notifications.instrument("#{event}.standard_flags", payload)
+        publish("#{event}.standard_flags", payload)
+      end
+
+      # Emits an event by its full name (the write path's
+      # `standard_flags.flag.*` and `standard_flags.cohort.*`).
+      def publish(name, payload)
+        ActiveSupport::Notifications.instrument(name, payload)
       rescue StandardError => e
-        warn "[standard_flags] #{event} notification failed: #{e.class}: #{e.message}"
+        warn "[standard_flags] #{name.delete_suffix('.standard_flags')} notification failed: #{e.class}: #{e.message}"
       end
 
       private

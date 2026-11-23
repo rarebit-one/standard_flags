@@ -2,6 +2,7 @@ require "standard_flags/runtime/values"
 require "standard_flags/runtime/rule_snapshot"
 require "standard_flags/runtime/store"
 require "standard_flags/runtime/memory_store"
+require "standard_flags/runtime/evaluation_tracker"
 require "standard_flags/runtime/cache"
 require "standard_flags/runtime/resolver"
 
@@ -68,6 +69,32 @@ module StandardFlags
         raise unless e.receiver.equal?(context)
       end
 
+      # Moves the stored revision on inside a write (`tx` is the store's
+      # transaction) and returns it. Every write calls this; stores take the
+      # number from a sequence, so it is never reused after a rollback.
+      def bump_revision!(tx)
+        tx.bump_revision
+      end
+
+      # See Cache#expire!.
+      def expire!
+        @cache&.expire!
+      end
+
+      # Which flags this process evaluated, for last_evaluated_at.
+      def tracker
+        @tracker ||= EvaluationTracker.new
+      end
+
+      # Called by Memo::Hook when a unit of work ends, after its evaluations:
+      # flushes the EvaluationTracker if it is due (at most once per
+      # `config.evaluation_tracking_interval` per process). Never raises.
+      def unit_of_work_complete!
+        @tracker&.flush(store, now) if enabled?
+      rescue StandardError
+        nil
+      end
+
       # Live memberships of one unit key across every rule and cohort: one
       # store read per unit key per unit of work, memoised through Memo. A
       # failed read is reported once and memoised as LOOKUP_FAILED, so an
@@ -119,6 +146,16 @@ module StandardFlags
         }
       end
 
+      # Hard-deletes memberships removed or expired more than
+      # `config.membership_retention` ago. Returns `{ removed:, expired: }`.
+      # Run by `flags:purge` and StandardFlags::PurgeJob.
+      def purge!(before: Time.now.utc - StandardFlags.config.membership_retention)
+        counts = store.purge(before: before)
+        Reporting.instrument(:purge, **counts, before: before.utc.iso8601)
+        expire!
+        counts
+      end
+
       # Whether the store's tables exist. Never raises: false when they are
       # missing or the store can't be reached.
       def ready?
@@ -156,6 +193,7 @@ module StandardFlags
       def reset!
         @cache = nil
         @clock = nil
+        @tracker = nil
       end
 
       # The stored string for a Ruby value: true/false become "on"/"off".

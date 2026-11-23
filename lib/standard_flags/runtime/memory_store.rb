@@ -1,3 +1,5 @@
+require "monitor"
+
 module StandardFlags
   module Runtime
     # An in-process store, for specs and for apps without a database. Every
@@ -13,22 +15,35 @@ module StandardFlags
     #
     # Values may be given as Ruby values (true, false, :sensor) or as their
     # stored strings ("on", "off", "sensor").
+    #
+    # It also takes the write path (StandardFlags::Operations): `write` holds
+    # the store's lock for the whole block and restores the previous state
+    # if the block raises; after_commit blocks run once it returns, outside
+    # the lock. Removed memberships are kept, as in the database, until
+    # `purge`.
     class MemoryStore < Store
       RULE_ATTRIBUTES = %i[
         status hash_version salt percentage_bps rollout_value variant_weights
-        fallthrough_value stop_value conditions cohorts
+        fallthrough_value stop_value conditions cohorts full_since last_evaluated_at updated_at
       ].freeze
+      # A removed membership and when it was removed.
+      Removed = Data.define(:membership, :removed_at)
 
       attr_reader :reads
 
       def initialize
-        @mutex = Mutex.new
+        # Reentrant, so an event subscriber that evaluates a flag during a
+        # write can read the store.
+        @mutex = Monitor.new
         @revision = 0
+        @sequence = 0 # like a database sequence: never rolled back
         @next_id = 0
         @rules = {}
         @cohorts = {}
         @memberships = []
+        @removed = []
         @reads = Hash.new(0)
+        @pending = nil # after_commit blocks of the write in progress
       end
 
       def revision
@@ -66,7 +81,7 @@ module StandardFlags
         raise ArgumentError, "unknown rule attribute(s): #{unknown.join(', ')}" unless unknown.empty?
 
         key = key.to_sym
-        write do
+        mutate do
           current = @rules[key]&.to_h || { id: next_id, key: key, salt: key.to_s }
           rule = Rule.build(**current.merge(normalize_rule(attributes), member_count: count_members(rule_id: current[:id])))
           raise ArgumentError, "status must be one of #{Values::STATUSES.join('/')}" unless Values::STATUSES.include?(rule.status)
@@ -77,7 +92,7 @@ module StandardFlags
 
       def put_cohort(key, unit:, name: nil, archived_at: nil)
         key = key.to_s
-        write do
+        mutate do
           id = @cohorts[key]&.id || next_id
           @cohorts[key] = Cohort.build(id: id, key: key, name: name, unit: unit, archived_at: archived_at,
                                        member_count: count_members(cohort_id: id))
@@ -86,7 +101,7 @@ module StandardFlags
 
       # Adds (or replaces) one membership on a rule or a cohort.
       def add_member(unit:, unit_key:, value:, rule: nil, cohort: nil, expires_at: nil)
-        write do
+        mutate do
           rule_id, cohort_id = owner_ids(rule, cohort)
           unit = unit.to_sym
           unit_key = unit_key.to_s
@@ -98,7 +113,7 @@ module StandardFlags
       end
 
       def remove_member(unit:, unit_key:, rule: nil, cohort: nil)
-        write do
+        mutate do
           rule_id, cohort_id = owner_ids(rule, cohort)
           @memberships.reject! do |m|
             m.rule_id == rule_id && m.cohort_id == cohort_id && m.unit == unit.to_sym && m.unit_key == unit_key.to_s
@@ -107,14 +122,193 @@ module StandardFlags
         end
       end
 
+      # Runs the block as one write (see Store). Other threads wait until it
+      # ends.
+      def write
+        committed = nil
+        value = @mutex.synchronize do
+          outermost = @pending.nil?
+          @pending ||= []
+          begin
+            isolate { yield Transaction.new(self) }.tap { committed = @pending if outermost }
+          ensure
+            @pending = nil if outermost
+          end
+        end
+        committed&.each(&:call)
+        value
+      end
+
+      def purge(before:)
+        @mutex.synchronize do
+          removed = @removed.count { |entry| entry.removed_at < before }
+          @removed.reject! { |entry| entry.removed_at < before }
+          expired, @memberships = @memberships.partition { |m| expired_before?(m, before) }
+          expired.map { |m| [ m.rule_id, m.cohort_id ] }.uniq.each { |ids| recount(*ids) }
+          next_revision! unless expired.empty?
+          { removed: removed, expired: expired.size }
+        end
+      end
+
+      def purgeable(before:)
+        @mutex.synchronize do
+          { removed: @removed.count { |entry| entry.removed_at < before },
+            expired: @memberships.count { |m| expired_before?(m, before) } }
+        end
+      end
+
+      # Counted in `reads`, so specs can assert how often it ran.
+      def touch_evaluated(keys, before:)
+        now = Time.now
+        @mutex.synchronize do
+          @reads[:touch_evaluated] += 1
+          keys.map(&:to_sym).count do |key|
+            rule = @rules[key]
+            next false unless rule && (rule.last_evaluated_at.nil? || rule.last_evaluated_at < before)
+
+            @rules[key] = rule.with(last_evaluated_at: now)
+          end
+        end
+      end
+
+      # Removed memberships, for specs. Not counted in `reads`.
+      def removed_memberships
+        @mutex.synchronize { @removed.map(&:membership) }
+      end
+
+      # One write. Methods are documented on Store.
+      class Transaction
+        def initialize(store)
+          @store = store
+        end
+
+        %i[lock_rule create_rule save_rule lock_cohort lock_cohorts create_cohort save_cohort rules_attached_to
+           upsert_members remove_members count_members lock_revision bump_revision].each do |name|
+          define_method(name) { |*args, **kwargs| @store.__send__(:"tx_#{name}", *args, **kwargs) }
+        end
+
+        def isolated(&)
+          @store.__send__(:isolate, &)
+        end
+
+        def after_commit(&block)
+          @store.__send__(:tx_after_commit, block)
+        end
+      end
+
       private
 
-      def write
+      # Restores the state (and drops after_commit blocks) the block added
+      # if it raises.
+      def isolate
+        saved = [ @rules.dup, @cohorts.dup, @memberships.dup, @removed.dup, @revision, @next_id, @pending.size ]
+        yield
+      rescue Exception # rubocop:disable Lint/RescueException -- any raise rolls the block back, then re-raises
+        @rules, @cohorts, @memberships, @removed, @revision, @next_id, pending = saved
+        @pending.slice!(pending..)
+        raise
+      end
+
+      def mutate
         @mutex.synchronize do
           result = yield
-          @revision += 1
+          next_revision!
           result
         end
+      end
+
+      def tx_lock_rule(key)
+        @rules[key.to_sym]
+      end
+
+      def tx_create_rule(key, salt:, hash_version:)
+        key = key.to_sym
+        @rules[key] ||= Rule.build(id: next_id, key: key, salt: salt, hash_version: hash_version, updated_at: Time.now)
+      end
+
+      def tx_save_rule(rule, attributes)
+        current = @rules.fetch(rule.key)
+        @rules[rule.key] = Rule.build(**current.to_h, **attributes, lock_version: current.lock_version + 1, updated_at: Time.now)
+      end
+
+      def tx_lock_cohort(key)
+        @cohorts[key.to_s]
+      end
+
+      def tx_lock_cohorts(keys)
+        keys.map(&:to_s).uniq.filter_map { |key| @cohorts[key] }.sort_by(&:id).to_h { |cohort| [ cohort.key, cohort ] }
+      end
+
+      def tx_create_cohort(key, unit:, name: nil, description: nil)
+        key = key.to_s
+        return if @cohorts.key?(key)
+
+        @cohorts[key] = Cohort.build(id: next_id, key: key, unit: unit, name: name, description: description)
+      end
+
+      def tx_after_commit(block)
+        @pending << block
+      end
+
+      def tx_save_cohort(cohort, attributes)
+        @cohorts[cohort.key] = Cohort.build(**@cohorts.fetch(cohort.key).to_h, **attributes)
+      end
+
+      def tx_rules_attached_to(cohort_key)
+        @rules.values.select { |rule| rule.cohort_attachments.any? { |key, _| key == cohort_key.to_s } }.map(&:key).sort
+      end
+
+      def tx_upsert_members(owner, unit:, unit_keys:, value:, expires_at:)
+        rule_id, cohort_id = owner_of(owner)
+        unit = unit.to_sym
+        counts = { added: 0, updated: 0 }
+        unit_keys.each do |unit_key|
+          existing = @memberships.index { |m| m.rule_id == rule_id && m.cohort_id == cohort_id && m.unit == unit && m.unit_key == unit_key }
+          counts[existing ? :updated : :added] += 1
+          @memberships.delete_at(existing) if existing
+          @memberships << Membership.new(rule_id: rule_id, cohort_id: cohort_id, unit: unit, unit_key: unit_key,
+                                         value: value, expires_at: expires_at)
+        end
+        recount(rule_id, cohort_id)
+        counts
+      end
+
+      def tx_remove_members(owner, unit:, unit_keys:)
+        rule_id, cohort_id = owner_of(owner)
+        now = Time.now
+        gone, @memberships = @memberships.partition do |m|
+          m.rule_id == rule_id && m.cohort_id == cohort_id && m.unit == unit.to_sym && unit_keys.include?(m.unit_key)
+        end
+        @removed.concat(gone.map { |m| Removed.new(membership: m, removed_at: now) })
+        recount(rule_id, cohort_id)
+        gone.size
+      end
+
+      def tx_count_members(owner, now: nil)
+        rule_id, cohort_id = owner_of(owner)
+        @memberships.count { |m| m.rule_id == rule_id && m.cohort_id == cohort_id && (now.nil? || m.live?(now)) }
+      end
+
+      def tx_lock_revision
+        @revision
+      end
+
+      def tx_bump_revision
+        next_revision!
+      end
+
+      # A rolled-back write restores @revision but not @sequence, so its
+      # number is never handed out again.
+      def next_revision!
+        @revision = (@sequence += 1)
+      end
+
+      def owner_of(owner)
+        owner.is_a?(Rule) ? [ owner.id, nil ] : [ nil, owner.id ]
+      end
+
+      def expired_before?(membership, before)
+        !membership.expires_at.nil? && membership.expires_at < before
       end
 
       def next_id

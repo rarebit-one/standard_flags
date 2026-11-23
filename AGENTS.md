@@ -54,7 +54,11 @@ lib/standard_flags/
 ├── testing.rb / rspec.rb           # Test overrides; RSpec helpers for hosts
 ├── controller.rb / job.rb          # requires_flag guards (autoloaded)
 ├── diagnostics.rb / health_check.rb# Diagnostics hash; opt-in standard_health check
-├── tooling.rb                      # list / stale / refs / manifest / typescript
+├── runtime.rb + runtime/            # Runtime rules: stores, cache, resolver, evaluation tracker
+├── operations.rb + operations/     # The write path: audited operations, validation, audit
+├── result.rb / actor.rb / events.rb# Operation results, system actors, published event names
+├── purge_job.rb                    # Membership purge (autoloaded; needs activejob)
+├── tooling.rb + tooling/           # list / stale / refs / manifest / typescript / show / changes
 ├── notifiers/                      # Logger, Sentry, Metrics subscribers
 └── engine.rb                       # Executor hook, registry loading, subscribers, rake tasks
 lib/tasks/standard_flags.rake
@@ -65,8 +69,7 @@ spec/fixtures/conformance/          # Shared evaluation fixtures (language-neutr
 ## Key Rules
 
 - **The evaluation order is a contract.** Test override, guard, ENV pin,
-  code default. Runtime rules will slot in between pin and default. Never
-  OR gates together.
+  runtime rule, code default. Never OR gates together.
 - **The read path never raises in production.** Per-flag errors return the
   flag's `fail:` value with reason ERROR; reporting and notifications are
   wrapped so a broken subscriber can't break a read.
@@ -76,6 +79,13 @@ spec/fixtures/conformance/          # Shared evaluation fixtures (language-neutr
 - **Conformance fixtures are the cross-language contract.** A behaviour
   change to evaluation needs a fixture case; keep fixtures generic.
 - **Keys are immutable and never reused.** Tombstones enforce it.
+- **Only operations write runtime rules.** Every change goes through
+  `StandardFlags::Operations` (authorise, refuse pins, lock, validate, bump
+  the revision, audit). Validate on write, never on read.
+- **Unit keys never leave the memberships table.** No unit key in a Result,
+  an audit row, a notification, a log line or an error report; membership
+  changes record the unit, the value and counts. Store errors carry only the
+  error class.
 
 ## Testing
 

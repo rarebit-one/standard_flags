@@ -2,6 +2,7 @@ require "date"
 require "json"
 require "pathname"
 require "active_support/core_ext/string/inflections"
+require "standard_flags/tooling/changes"
 
 module StandardFlags
   # The logic behind the rake tasks, kept out of the rake file so it can be
@@ -63,10 +64,21 @@ module StandardFlags
     # `flags:stale`: flags and modes past their remove_by date. Each one's
     # `final:` value says which branch to keep when deleting it. Permanent
     # flags have no remove_by date, so they never appear.
+    #
+    # With runtime rules on it also lists rules worth cleaning up: at 100%
+    # or stopped for 30 days or more, not evaluated in 14 days (when
+    # `config.track_evaluations` is on), and rules for undeclared or
+    # tombstoned keys; and memberships past `config.membership_retention`
+    # that `flags:purge` would delete.
     class Stale
-      def initialize(registry: StandardFlags.registry, today: Date.today)
+      SETTLED_AFTER = 30 * 86_400
+      UNUSED_AFTER = 14 * 86_400
+
+      def initialize(registry: StandardFlags.registry, today: Date.today, now: Time.now.utc, store: nil)
         @registry = registry
         @today = today
+        @now = now
+        @store = store
       end
 
       def definitions
@@ -75,13 +87,67 @@ module StandardFlags
 
       def render
         stale = definitions
-        return "No flags are past their remove_by date." if stale.empty?
+        lines =
+          if stale.empty?
+            [ "No flags are past their remove_by date." ]
+          else
+            stale.map do |definition|
+              final = definition.final.nil? ? "" : ", final: #{definition.final.inspect}"
+              "#{definition.key} (#{definition.kind}, owner: #{definition.owner}) " \
+                "was due for removal on #{definition.remove_by.iso8601}#{final}"
+            end
+          end
+        lines.concat(runtime_lines) if Runtime.enabled?
+        lines.join("\n")
+      end
 
-        stale.map do |definition|
-          final = definition.final.nil? ? "" : ", final: #{definition.final.inspect}"
-          "#{definition.key} (#{definition.kind}, owner: #{definition.owner}) " \
-            "was due for removal on #{definition.remove_by.iso8601}#{final}"
-        end.join("\n")
+      # Findings about stored rules and memberships, one String each.
+      def runtime_findings
+        loaded = store.load
+        findings = loaded.rules.sort_by(&:key).flat_map { |rule| rule_findings(rule) }
+        due = store.purgeable(before: @now - StandardFlags.config.membership_retention)
+        unless (due[:removed] + due[:expired]).zero?
+          findings << "#{due[:removed]} removed and #{due[:expired]} expired memberships are past retention; run flags:purge"
+        end
+        findings
+      end
+
+      private
+
+      def store
+        @store || Runtime.store
+      end
+
+      def runtime_lines
+        findings = runtime_findings
+        findings.empty? ? [ "No stale runtime rules." ] : findings
+      rescue StandardError => e
+        [ "runtime rules: could not read the store (#{(e.cause_class if e.is_a?(Runtime::StoreError)) || e.class})" ]
+      end
+
+      def rule_findings(rule)
+        findings = []
+        if @registry.tombstoned?(rule.key)
+          findings << "rule :#{rule.key} is for a tombstoned flag"
+        elsif !@registry.key?(rule.key)
+          findings << "rule :#{rule.key} is for an undeclared flag"
+        end
+        if rule.percentage_bps == Bucket::BUCKETS && rule.full_since && rule.full_since <= @now - SETTLED_AFTER
+          findings << "rule :#{rule.key} has served 100% since #{day(rule.full_since)}; remove the flag or Stop it"
+        end
+        if rule.stopped? && rule.updated_at && rule.updated_at <= @now - SETTLED_AFTER
+          findings << "rule :#{rule.key} has been stopped since #{day(rule.updated_at)}; remove the flag"
+        end
+        last = rule.last_evaluated_at || rule.updated_at
+        if StandardFlags.config.track_evaluations && last && last <= @now - UNUSED_AFTER
+          seen = rule.last_evaluated_at ? "since #{day(last)}" : "since it changed on #{day(last)}"
+          findings << "rule :#{rule.key} has not been evaluated #{seen}"
+        end
+        findings
+      end
+
+      def day(time)
+        time.utc.to_date.iso8601
       end
     end
 
