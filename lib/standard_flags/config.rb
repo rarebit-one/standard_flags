@@ -48,7 +48,9 @@ module StandardFlags
     # a reporter that raises falls back to it.
     attr_reader :error_reporter
     # `call(segment_name, context)` answers whether the context belongs to an
-    # app-defined segment. nil skips segment conditions.
+    # app-defined segment. nil skips segment conditions. Through the
+    # OpenFeature provider the context's actors are unit keys (strings), not
+    # records, so a resolver used there must handle both.
     attr_accessor :segment_resolver
 
     # The write path's policy hook: `call(actor, scope, key)` is truthy when

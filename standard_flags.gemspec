@@ -37,6 +37,9 @@ Gem::Specification.new do |spec|
   #                    gem loads ActiveRecord.
   #   pg             — runtime rules are Postgres-only (jsonb), through the
   #                    host's own adapter.
+  #   openfeature-sdk — StandardFlags::OpenFeature::Provider loads only when a
+  #                    host requires "standard_flags/open_feature", which raises
+  #                    a LoadError naming the gem when it is missing.
   #   sentry-ruby    — the Sentry and Metrics subscribers no-op without it.
   #   standard_health — StandardFlags::HealthCheck is only defined when it is,
   #                    and the 0.9+ contribution hook only runs when it loads.

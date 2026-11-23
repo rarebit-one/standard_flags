@@ -61,6 +61,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   if it raises.
 - **Notifications** `runtime_refresh`, `runtime_stale`, `rule_invalid` and
   `targeting_key_missing` (`.standard_flags`), with Logger lines.
+- **OpenFeature provider (optional).** `require "standard_flags/open_feature"`
+  defines `StandardFlags::OpenFeature::Provider` for the `openfeature-sdk`
+  gem, which the app brings (it is not a dependency; requiring the file
+  without it raises a `LoadError` that says so). Booleans answer
+  `fetch_boolean_value`; modes and experiments answer `fetch_string_value`.
+  Other pairings return the caller's default with `TYPE_MISMATCH`, and
+  unknown keys return it with `FLAG_NOT_FOUND`, even when strict. Reasons and
+  error codes map one to one, `ENV_PIN` and `KILL_SWITCH` pass through, and
+  `kind`, `rule_id` and `source_env_var` go in `flag_metadata`. The
+  evaluation context maps to a `StandardFlags::Context`: `targeting_key` and
+  unit-named fields are unit keys, used as given (no `from:` or `key:`);
+  `platform`, `appVersion`/`app_version` and `build` become the client. Only
+  the flag's own unit key (or `targeting_key`) must be a scalar; other units'
+  non-scalar fields are dropped. `env` is ignored unless the provider is built
+  with `allow_env_override: true`. The segment resolver receives keys, not
+  records, under OpenFeature.
+- **Bounded report registry.** The once-per-process report memory holds at
+  most 1,000 tokens. Past that it stops recording (and reporting) new ones
+  and emits one `report_registry_full.standard_flags` notification, so
+  distinct unknown keys can't grow memory without limit.
 - **Conformance** fixtures for runtime rules
   (`spec/fixtures/conformance/runtime/`), and a Postgres CI job that runs the
   database specs, including `Bucket.v2` against `Bucket.sql_v2`.
@@ -158,6 +178,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of being dropped. `flags:` metadata and `before` hooks work as
   before. `StandardFlags::RSpecSupport.install(config)` wires the helpers into
   a custom configuration.
+
+### Changed
+
+- **`forbidden_in:` guards can't be relaxed by a context environment.** A
+  flag is forced off when either the context's `env` or the process's own
+  environment (`registry.current_env`) is forbidden. Before, a
+  `Context.new(env:)` naming an allowed environment skipped the guard.
 
 ## [0.1.0] - 2026-11-22
 

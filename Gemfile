@@ -21,4 +21,7 @@ group :test do
   gem "rack-test", require: false
   gem "sentry-ruby", ">= 5.17", require: false
   gem "standard_health", ">= 0.8", require: false
+  # The optional OpenFeature provider (require "standard_flags/open_feature").
+  # Never a gemspec dependency: only hosts that use OpenFeature bring it.
+  gem "openfeature-sdk", "~> 0.8", require: false
 end

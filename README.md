@@ -25,6 +25,7 @@ path; the audited write operations come next). See [Roadmap](#roadmap).
 - [Rake tasks](#rake-tasks)
 - [Observability](#observability)
 - [Health check and diagnostics](#health-check-and-diagnostics)
+- [OpenFeature](#openfeature)
 - [Testing](#testing)
 - [Conformance suite](#conformance-suite)
 - [Bucketing](#bucketing)
@@ -240,7 +241,9 @@ Each evaluation walks these layers in order and stops at the first one that
 answers. Gates are never OR'd together.
 
 1. **Test override.** `with_flag(:x, true)`. Exists only in tests. Reason `STATIC`.
-2. **Guard.** `forbidden_in:` forces the off value. Reason `DISABLED`.
+2. **Guard.** `forbidden_in:` forces the off value. Reason `DISABLED`. It
+   applies when either the context's `env` or the process's own environment
+   is forbidden, so a caller-supplied environment can't relax it.
 3. **ENV pin.** `STANDARD_FLAGS_<KEY>`, then legacy `env:` names. Reason
    `ENV_PIN`, or `KILL_SWITCH` when a kill switch is pinned off.
 4. **Runtime rule**, when [runtime rules](#runtime-rules) are on and the
@@ -282,6 +285,18 @@ StandardFlags.configure do |config|
   config.runtime_rules = true
   config.refresh_interval = 5                    # seconds between revision checks
   config.segment_resolver = ->(name, context) { Segments.member?(name, context.account) }
+end
+```
+
+Through the [OpenFeature provider](#openfeature), the segment resolver gets a
+context whose actors are unit keys (strings), not records. If you use both,
+handle both:
+
+```ruby
+config.segment_resolver = lambda do |name, context|
+  account = context.account
+  account = Account.find_by(id: account) if account.is_a?(String)  # an OpenFeature key
+  account.present? && Segments.member?(name, account)
 end
 ```
 
@@ -896,6 +911,7 @@ end
 | `change.standard_flags` | An operation's change committed (event, key or cohort, actor label, revision, store revision). The full events are `standard_flags.flag.*` and `standard_flags.cohort.*` ([Audit](#audit)). |
 | `purge.standard_flags` | Memberships purged (counts). |
 | `evaluation_tracking_failed.standard_flags` | Writing `last_evaluated_at` failed; it is retried. |
+| `report_registry_full.standard_flags` | The once-per-process report registry reached its cap (1,000 entries); new warnings are no longer reported in this process. |
 
 Built-in subscribers: **Logger** (always), **Metrics** (`Sentry::Metrics`
 counters when sentry-ruby is loaded) and **Sentry** (handled warnings for
@@ -960,6 +976,91 @@ readiness, any unreachable error class, store warnings, revision, snapshot
 age, staleness and each rule's status), and
 `flags:list` gains a `rule` column and a header line with the revision and
 age. It contains variable names only, never raw environment values.
+
+## OpenFeature
+
+Apps that read flags through the
+[openfeature-sdk](https://github.com/open-feature/ruby-sdk) gem can put the
+registry behind it. The SDK is optional: standard_flags doesn't depend on it,
+and nothing loads the provider until you require it.
+
+```ruby
+# Gemfile
+gem "openfeature-sdk"
+
+# config/initializers/open_feature.rb
+require "standard_flags/open_feature"
+
+OpenFeature::SDK.configure do |config|
+  config.set_provider(StandardFlags::OpenFeature::Provider.new)
+end
+
+client = OpenFeature::SDK.build_client
+client.fetch_boolean_value(flag_key: "new_checkout", default_value: false,
+                           evaluation_context: OpenFeature::SDK::EvaluationContext.new(targeting_key: account.id.to_s))
+```
+
+Requiring `standard_flags/open_feature` without the SDK raises a `LoadError`
+that says to add it. Each fetch walks the same chain as
+`StandardFlags.evaluate`, so test overrides, guards, pins and runtime rules
+all apply.
+
+| Kind | Fetch | Value |
+|---|---|---|
+| `flag`, `kill_switch`, `compat` | `fetch_boolean_value` | `true` / `false` (variant `"on"` / `"off"`) |
+| `mode` | `fetch_string_value` | the value's name, e.g. `"sensor"` |
+| `experiment` | `fetch_string_value` | the variant |
+
+- **Mismatches.** Any other pairing, and every number, integer, float or
+  object fetch, returns your default with `TYPE_MISMATCH`, reported once.
+- **Unknown keys** return your default with `FLAG_NOT_FOUND`, even when
+  `config.strict` is on. The provider never raises.
+- **Reasons and error codes** map one to one. `ENV_PIN` and `KILL_SWITCH`
+  pass through as custom reasons, which OpenFeature allows.
+- **`flag_metadata`** carries `kind`, plus `rule_id` and `source_env_var`
+  when they are set.
+- **Errors serve your default.** The SDK client replaces the value with
+  the caller's default whenever there is an error code. So through OpenFeature,
+  a flag's `fail:` value (a kill switch failing open, say), the
+  fallthrough served with `TARGETING_KEY_MISSING`, and the decision made when
+  the membership lookup fails (core still decides by segment, percentage or
+  fallthrough but marks it `ERROR`/`GENERAL`) never reach the caller. Pass
+  the default you want on failure.
+- **Lifecycle.** `metadata.name` is `"standard_flags"`. There is no `init`,
+  so the provider is ready as soon as it is set, and it emits no events;
+  `shutdown` does nothing.
+
+The evaluation context becomes a `StandardFlags::Context`:
+
+- `targeting_key` is the key of the flag's declared unit.
+- A field named after a unit (`organization`, say) sets that unit's key. For
+  a flag on that unit, it wins over `targeting_key`.
+- `platform`, `appVersion` (or `app_version`) and `build` become the client,
+  for client conditions.
+- `env` is ignored unless you construct the provider with
+  `Provider.new(allow_env_override: true)`. Then it picks the environment for
+  per-environment defaults. It never relaxes a `forbidden_in:` guard, which
+  also checks the process's own environment. It is off by default because
+  `env` is a common attribute name in merged global, transaction and client
+  contexts.
+
+Other fields are ignored. The flag's own unit key (its unit's field, else
+`targeting_key`) must be a String, Symbol or Integer; anything else (a Hash,
+say) returns your default with `INVALID_CONTEXT`. Other units' fields that
+aren't scalars are dropped, so structured attributes in a merged context
+don't break flags that don't use them.
+
+**Keys are used as given.** A unit's `from:` and `key:` turn records into
+keys, and OpenFeature callers already pass keys, so the provider applies
+neither. Pass the key exactly as runtime rules store it: `record.id.to_s` by
+default, or whatever your `key:` lambda returns (the normalised phone number,
+not the raw one).
+
+**The segment resolver gets keys too.** `config.segment_resolver` receives
+the same keys-only context, so a resolver written for records
+(`context.account.plan`) would raise, and every segmented rule would serve
+your default with `GENERAL`. Write it to accept a key string as well as a
+record; see the example under [Runtime rules](#runtime-rules).
 
 ## Testing
 

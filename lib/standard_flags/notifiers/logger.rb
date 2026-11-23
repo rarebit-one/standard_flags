@@ -38,6 +38,8 @@ module StandardFlags
           [ :debug, "loaded runtime rules at revision #{payload[:revision]} (#{payload[:rules]} rules)" ]
         when "rule_invalid"
           [ :warn, "runtime rule for :#{payload[:key]} #{payload[:error]}; serving its fail value" ]
+        when "report_registry_full"
+          [ :warn, "report registry full (#{payload[:limit]} entries); new warnings are no longer reported in this process" ]
         when "targeting_key_missing"
           [ :debug, "runtime rule for :#{payload[:key]} needs a :#{payload[:unit]} key and the context has none" ]
         end
