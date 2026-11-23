@@ -16,7 +16,8 @@ RSpec.describe StandardFlags::Actor do
   it "labels actors by class and id only" do
     user = Struct.new(:id, :email).new(7, "someone@example.com")
     expect(described_class.label(described_class.system)).to eq("system:system")
-    expect(described_class.label(user)).to end_with(":7").and(satisfy { |label| !label.include?("example.com") })
+    expect(described_class.label(user)).to end_with(":7")
+    expect(described_class.label(user)).not_to include(user.email)
     expect(described_class.label(Object.new)).to eq("Object")
     expect(described_class.label(nil)).to be_nil
   end
