@@ -78,7 +78,8 @@ class <%= controller_class %> < <%= base_controller %>
     result = operation.call(params[:id], actor: standard_flags_actor, reason: params[:reason].to_s,
                                          expected_revision: params[:expected_revision].presence&.to_i, **args)
     if result.success?
-      flash[:notice] = "#{operation.name.demodulize}: done (revision #{result.value[:revision]})"
+      flash[:notice] = "#{operation.name.demodulize}: done (revision #{result.value[:revision]}#{', started' if result.value[:started]})" \
+                       "#{result.warnings.map { |warning| "; #{warning}" }.join}"
     else
       flash[:alert] = "#{operation.name.demodulize} refused (#{result.code}): #{result.errors.join('; ')}"
     end

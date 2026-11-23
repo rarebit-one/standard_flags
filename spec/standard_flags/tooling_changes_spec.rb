@@ -21,6 +21,15 @@ RSpec.describe StandardFlags::Tooling, registry: OperationHelpers::REGISTRY do
       expect(store.rule(:strict_gates).rollout_value).to eq("on")
     end
 
+    it "says when flags:set started a draft, and warns when the rule is paused" do
+      expect(command(:set, KEY: "ai_assistant", VALUE: "off", REASON: "incident").message)
+        .to eq("flags:set ai_assistant: ok, revision 1 (status running, started)")
+      expect(command(:pause, KEY: "ai_assistant", REASON: "x")).to be_ok
+      expect(command(:set, KEY: "ai_assistant", VALUE: "on", REASON: "later").message)
+        .to eq("flags:set ai_assistant: ok, revision 3 (status paused)\n" \
+               "  warning: rule is paused; the value is stored but not served until Start")
+    end
+
     it "starts, pauses and stops" do
       store.put_rule(:new_checkout, status: :draft)
       expect(command(:start, KEY: "new_checkout", REASON: "x").message).to include("status running")

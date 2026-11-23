@@ -28,10 +28,12 @@ module StandardFlags
     # store_revision: }` plus what the operation changed. `revision` is the
     # number `expected_revision` is checked against: a rule's lock_version,
     # or for cohort operations the store's revision. `store_revision` is
-    # always the store's. Success means the write committed (or, inside a
-    # host transaction, will commit with it). Every failure is a Result,
-    # never an exception; store and unexpected errors are reported through
-    # `config.error_reporter` / Rails.error (:store_error, :error).
+    # always the store's. `warnings` lists anything about a committed change
+    # the caller should know (SetValue on a paused rule, say). Success
+    # means the write committed (or, inside a host transaction, will commit
+    # with it). Every failure is a Result, never an exception; store and
+    # unexpected errors are reported through `config.error_reporter` /
+    # Rails.error (:store_error, :error).
     class Base
       class << self
         def call(target, actor: nil, reason: nil, expected_revision: nil, registry: StandardFlags.registry, **args)
@@ -84,11 +86,12 @@ module StandardFlags
         check_target!
         check_runtime!
         @announcements = []
+        @warnings = []
         value = Runtime.store.write do |tx|
           @tx = tx
           run.tap { tx.after_commit { committed } }
         end
-        Result.success(value)
+        Result.new(success: true, value: value, warnings: @warnings)
       rescue Failure => e
         Result.failure(e.code, e.message)
       rescue Runtime::StoreError => e
@@ -252,6 +255,11 @@ module StandardFlags
 
       def save!(attributes)
         @rule = tx.save_rule(@rule, attributes)
+      end
+
+      # Adds a warning to the Result; the change still commits.
+      def warn_caller(message)
+        @warnings << message
       end
 
       # -- helpers -----------------------------------------------------------

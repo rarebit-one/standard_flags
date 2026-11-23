@@ -3,8 +3,14 @@ require "spec_helper"
 RSpec.describe StandardFlags::Result do
   it "carries a value on success" do
     result = described_class.success(revision: 3)
-    expect(result).to have_attributes(success?: true, failure?: false, value: { revision: 3 }, errors: [], code: nil)
+    expect(result).to have_attributes(success?: true, failure?: false, value: { revision: 3 }, errors: [], code: nil, warnings: [])
     expect(result.inspect).to eq("#<StandardFlags::Result success>")
+  end
+
+  it "carries warnings about a change that succeeded" do
+    result = described_class.new(success: true, value: { revision: 3 }, warnings: [ "rule is paused" ])
+    expect(result).to have_attributes(success?: true, warnings: [ "rule is paused" ])
+    expect(result.warnings).to be_frozen
   end
 
   it "carries a code and messages on failure" do

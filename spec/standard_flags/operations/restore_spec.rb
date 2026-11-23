@@ -175,6 +175,42 @@ RSpec.describe StandardFlags::Operations::Restore, registry: OperationHelpers::R
     end
   end
 
+  # Restore writes through its own operation, not SetValue, so a value put
+  # back never starts a rule that wasn't running then.
+  describe "statuses" do
+    it "puts a paused rule back paused, with its value" do
+      op!(ops::SetValue, :strict_gates, value: :sensor)
+      op!(ops::Pause, :strict_gates)
+      at = checkpoint
+      op!(ops::Start, :strict_gates)
+      op!(ops::SetValue, :strict_gates, value: :on)
+      expect(restore(at, apply: true)).to be_success
+      expect(store.rule(:strict_gates)).to have_attributes(status: "paused", fallthrough_value: "sensor")
+    end
+
+    it "puts a running rule back running, with its value" do
+      op!(ops::SetValue, :strict_gates, value: :sensor)
+      at = checkpoint
+      op!(ops::Pause, :strict_gates)
+      op!(ops::SetValue, :strict_gates, value: :on)
+      expect(restore(at, apply: true)).to be_success
+      expect(store.rule(:strict_gates)).to have_attributes(status: "running", fallthrough_value: "sensor")
+    end
+
+    it "puts a value back on a draft without starting it" do
+      at = checkpoint
+      store.put_rule(:strict_gates, status: :draft)
+      salt = store.rule(:strict_gates).salt
+      trail.rows << [ at - 1, "standard_flags.flag.paused",
+                      { "key" => "strict_gates", "after" => { "status" => "paused", "salt" => salt, "hash_version" => 2, "percentage_bps" => nil,
+                                                              "rollout_value" => nil, "variant_weights" => {}, "fallthrough_value" => "sensor",
+                                                              "stop_value" => nil, "conditions" => {}, "cohorts" => [] } } ]
+      result = restore(at, keys: %w[strict_gates], apply: true)
+      expect(entry(result, :strict_gates)).to include(status: "applied", changes: [ "fallthrough - → sensor" ])
+      expect(store.rule(:strict_gates)).to have_attributes(status: "draft", fallthrough_value: "sensor")
+    end
+  end
+
   describe "what it skips" do
     it "skips a pinned flag, naming the variable" do
       op!(ops::Start, :new_checkout) if op(ops::Ramp, :new_checkout, bps: 500).success?
@@ -213,7 +249,6 @@ RSpec.describe StandardFlags::Operations::Restore, registry: OperationHelpers::R
     # about the rule then; only an audited state may drive a change.
     it "skips a flag with no audit history at T, whatever it is now, members included" do
       op!(ops::SetValue, :ai_assistant, value: false)
-      op!(ops::Start, :ai_assistant) # a kill switch thrown before the audit window
       op!(ops::Stop, :new_checkout, serve: true)
       op!(ops::AddMembers, :new_checkout, keys: %w[acct-7731])
       at = checkpoint

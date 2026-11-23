@@ -1,5 +1,5 @@
 {
-  "description": "The write path: operations applied in order to an empty store, then evaluations. Each step names an operation (snake_case: ramp, set_value, add_members, ...), its target (a flag key, or cohort:<key>), its arguments as stored strings, an optional expected_revision, and the failure code it must return when it is refused (\"fails\"). Steps run as a system actor that the policy allows. Rules created by a step take the flag's bucketing:, so bucket numbers in case names are the v2 rollout bucket (see bucket_vectors.json).",
+  "description": "The write path: operations applied in order to an empty store, then evaluations. Each step names an operation (snake_case: ramp, set_value, add_members, ...), its target (a flag key, or cohort:<key>), its arguments as stored strings, an optional expected_revision, and the failure code it must return when it is refused (\"fails\"). A set_value with a value on a draft rule (including the one it creates) starts it in the same write; every other operation leaves a draft a draft. Steps run as a system actor that the policy allows. Rules created by a step take the flag's bucketing:, so bucket numbers in case names are the v2 rollout bucket (see bucket_vectors.json).",
   "registry": {
     "units": [
       "account"
@@ -41,7 +41,37 @@
   },
   "cases": [
     {
-      "name": "a draft rule serves the code default until it starts",
+      "name": "a draft rule serves the code default until it starts (acct_8 is bucket 2290)",
+      "steps": [
+        {
+          "op": "ramp",
+          "target": "new_checkout",
+          "args": {
+            "bps": 2500
+          }
+        }
+      ],
+      "checks": [
+        {
+          "flag": "new_checkout",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_8"
+            }
+          },
+          "expected": {
+            "value": false,
+            "variant": "off",
+            "reason": "DEFAULT",
+            "rule_id": null,
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_value on a draft starts it, so the value serves at once",
       "steps": [
         {
           "op": "set_value",
@@ -57,7 +87,132 @@
           "environment": "production",
           "context": {},
           "expected": {
+            "value": true,
+            "variant": "on",
+            "reason": "TARGETING_MATCH",
+            "rule_id": "fallthrough",
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "start refuses a rule set_value already started",
+      "steps": [
+        {
+          "op": "set_value",
+          "target": "global_banner",
+          "args": {
+            "value": "on"
+          }
+        },
+        {
+          "op": "start",
+          "target": "global_banner",
+          "fails": "invalid"
+        }
+      ],
+      "checks": [
+        {
+          "flag": "global_banner",
+          "environment": "production",
+          "context": {},
+          "expected": {
+            "value": true,
+            "variant": "on",
+            "reason": "TARGETING_MATCH",
+            "rule_id": "fallthrough",
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_value starts a draft with what was staged on it (acct_8 is bucket 2290, acct_1 is 8584)",
+      "steps": [
+        {
+          "op": "ramp",
+          "target": "new_checkout",
+          "args": {
+            "bps": 2500
+          }
+        },
+        {
+          "op": "set_value",
+          "target": "new_checkout",
+          "args": {
+            "value": "off"
+          }
+        }
+      ],
+      "checks": [
+        {
+          "flag": "new_checkout",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_8"
+            }
+          },
+          "expected": {
+            "value": true,
+            "variant": "on",
+            "reason": "SPLIT",
+            "rule_id": "percentage",
+            "error_code": null
+          }
+        },
+        {
+          "flag": "new_checkout",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_1"
+            }
+          },
+          "expected": {
             "value": false,
+            "variant": "off",
+            "reason": "TARGETING_MATCH",
+            "rule_id": "fallthrough",
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_value on a paused rule stores the value and leaves it paused",
+      "steps": [
+        {
+          "op": "set_value",
+          "target": "strict_gates",
+          "args": {
+            "value": "sensor"
+          }
+        },
+        {
+          "op": "pause",
+          "target": "strict_gates"
+        },
+        {
+          "op": "set_value",
+          "target": "strict_gates",
+          "args": {
+            "value": "on"
+          }
+        }
+      ],
+      "checks": [
+        {
+          "flag": "strict_gates",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_1"
+            }
+          },
+          "expected": {
+            "value": "off",
             "variant": "off",
             "reason": "DEFAULT",
             "rule_id": null,
@@ -67,13 +222,13 @@
       ]
     },
     {
-      "name": "a started rule serves its fallthrough value",
+      "name": "clearing the value of a new rule leaves it a draft",
       "steps": [
         {
           "op": "set_value",
           "target": "global_banner",
           "args": {
-            "value": "on"
+            "value": null
           }
         },
         {
@@ -87,10 +242,10 @@
           "environment": "production",
           "context": {},
           "expected": {
-            "value": true,
-            "variant": "on",
-            "reason": "TARGETING_MATCH",
-            "rule_id": "fallthrough",
+            "value": false,
+            "variant": "off",
+            "reason": "DEFAULT",
+            "rule_id": null,
             "error_code": null
           }
         }
@@ -157,10 +312,6 @@
           }
         },
         {
-          "op": "start",
-          "target": "strict_gates"
-        },
-        {
           "op": "pause",
           "target": "strict_gates"
         }
@@ -195,10 +346,6 @@
           }
         },
         {
-          "op": "start",
-          "target": "strict_gates"
-        },
-        {
           "op": "pause",
           "target": "strict_gates"
         },
@@ -227,7 +374,7 @@
       ]
     },
     {
-      "name": "set_value throws a kill switch from the database",
+      "name": "set_value throws a kill switch from the database, starting the rule it creates",
       "steps": [
         {
           "op": "set_value",
@@ -235,10 +382,6 @@
           "args": {
             "value": "off"
           }
-        },
-        {
-          "op": "start",
-          "target": "ai_assistant"
         }
       ],
       "checks": [
@@ -304,10 +447,6 @@
           "args": {
             "value": "sensor"
           }
-        },
-        {
-          "op": "start",
-          "target": "strict_gates"
         }
       ],
       "checks": [
@@ -462,34 +601,38 @@
       "name": "expected_revision is the rule's revision: a stale one is refused, the current one applies",
       "steps": [
         {
-          "op": "set_value",
-          "target": "global_banner",
+          "op": "ramp",
+          "target": "new_checkout",
           "args": {
-            "value": "on"
+            "bps": 2500
           }
         },
         {
           "op": "start",
-          "target": "global_banner",
+          "target": "new_checkout",
           "expected_revision": 0,
           "fails": "stale_revision"
         },
         {
           "op": "start",
-          "target": "global_banner",
+          "target": "new_checkout",
           "expected_revision": 1
         }
       ],
       "checks": [
         {
-          "flag": "global_banner",
+          "flag": "new_checkout",
           "environment": "production",
-          "context": {},
+          "context": {
+            "units": {
+              "account": "acct_8"
+            }
+          },
           "expected": {
             "value": true,
             "variant": "on",
-            "reason": "TARGETING_MATCH",
-            "rule_id": "fallthrough",
+            "reason": "SPLIT",
+            "rule_id": "percentage",
             "error_code": null
           }
         }
