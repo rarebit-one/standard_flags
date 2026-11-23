@@ -268,9 +268,119 @@ module StandardFlags
     end
 
     # `standard_flags:typescript`: a `.d.ts` with one Features interface per
-    # audience, keyed by wire name.
+    # audience, keyed by wire name; every flag key and its stored values; and
+    # the shapes of StandardFlags::MCP's results, which the admin pages
+    # (`standard_flags:admin`) are typed from.
     class TypeScript
       IDENTIFIER = /\A[A-Za-z_$][A-Za-z0-9_$]*\z/
+
+      # The JSON StandardFlags::MCP returns (and the admin controller passes
+      # as props). Static: the flag-specific parts are FlagKey and FlagValues.
+      MCP_TYPES = <<~TS.freeze
+        // Results of StandardFlags::MCP tools: the admin page props.
+        export type FlagKind = "flag" | "kill_switch" | "mode" | "experiment" | "compat";
+        export type RuleStatus = "draft" | "running" | "paused" | "stopped";
+
+        export interface FlagPin {
+          readonly env_var: string;
+          readonly label: string;
+        }
+
+        export interface FlagRuleSummary {
+          readonly status: RuleStatus;
+          readonly revision: number;
+          readonly percentage_bps: number | null;
+          readonly member_count: number;
+        }
+
+        export interface FlagRule {
+          readonly status: RuleStatus;
+          readonly revision: number;
+          readonly hash_version: number;
+          readonly percentage_bps: number | null;
+          readonly rollout_value: string | null;
+          readonly variant_weights: Readonly<Record<string, number>>;
+          readonly fallthrough_value: string | null;
+          readonly stop_value: string | null;
+          readonly conditions: Readonly<Record<string, unknown>>;
+          readonly cohorts: ReadonlyArray<{ readonly cohort: string; readonly value: string }>;
+          readonly hidden_cohorts: number;
+          readonly member_count: number;
+          readonly full_since: string | null;
+          readonly last_evaluated_at: string | null;
+        }
+
+        export interface FlagSummary {
+          readonly key: FlagKey;
+          readonly kind: FlagKind;
+          readonly owner: string | null;
+          readonly description: string | null;
+          readonly unit: string | null;
+          readonly values: ReadonlyArray<string>;
+          readonly value: string | null;
+          readonly reason: string;
+          readonly source: string;
+          readonly pinned: FlagPin | null;
+          readonly rule: FlagRuleSummary | null;
+        }
+
+        export interface FlagList {
+          readonly flags: ReadonlyArray<FlagSummary>;
+          readonly runtime_rules: boolean;
+          readonly store_revision: number | null;
+        }
+
+        export interface FlagEvaluation {
+          readonly unit_key: string | null;
+          readonly value: string | null;
+          readonly variant: string | null;
+          readonly reason: string;
+          readonly error_code: string | null;
+          readonly rule_id: string | null;
+          readonly source: string;
+        }
+
+        export interface FlagDetail {
+          readonly key: FlagKey;
+          readonly kind: FlagKind;
+          readonly owner: string | null;
+          readonly description: string | null;
+          readonly unit: string | null;
+          readonly values: ReadonlyArray<string>;
+          readonly default: string | null;
+          readonly evaluation: FlagEvaluation;
+          readonly pinned: FlagPin | null;
+          readonly runtime_rules: boolean;
+          readonly rule: FlagRule | null;
+          readonly store_revision: number | null;
+        }
+
+        export interface FlagMember {
+          readonly unit: string;
+          readonly unit_key: string;
+          readonly value: string;
+          readonly expires_at: string | null;
+          readonly expired: boolean;
+          readonly added_at: string | null;
+        }
+
+        export interface FlagMemberPage {
+          readonly total: number;
+          readonly offset: number;
+          readonly limit: number;
+          readonly next_offset: number | null;
+          readonly revealed: boolean;
+          readonly members: ReadonlyArray<FlagMember>;
+        }
+
+        export interface FlagAuditEntry {
+          readonly event: string;
+          readonly occurred_at: string | null;
+          readonly actor: string | null;
+          readonly reason: string | null;
+          readonly revision: number | null;
+        }
+      TS
 
       def initialize(registry: StandardFlags.registry)
         @registry = registry
@@ -289,10 +399,25 @@ module StandardFlags
         out << "export type FeaturesByAudience = {"
         audiences.each { |audience| out << "  #{property(audience.to_s)}: #{interface_name(audience)};" }
         out << "};" << ""
+        out.concat(flag_types)
+        out << MCP_TYPES
         out.join("\n")
       end
 
       private
+
+      # FlagKey (every declared key) and FlagValues (each flag's stored
+      # values: "on"/"off", mode values, variants).
+      def flag_types
+        definitions = @registry.definitions.sort_by(&:key)
+        keys = definitions.map { |definition| definition.key.to_s.to_json }
+        out = [ "export type FlagKey = #{keys.empty? ? 'never' : keys.join(' | ')};", "", "export type FlagValues = {" ]
+        definitions.each do |definition|
+          values = definition.allowed_values.map { |value| Runtime.wire(value).to_json }.join(" | ")
+          out << "  readonly #{property(definition.key.to_s)}: #{values};"
+        end
+        out << "};" << ""
+      end
 
       def interface_name(audience)
         "#{audience.to_s.camelize}Features"

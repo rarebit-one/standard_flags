@@ -45,6 +45,17 @@ module StandardFlags
       @flags[key.to_sym]
     end
 
+    # A copy in which `unit` resolves every context to `unit_key`, used as
+    # given: what one unit gets, asked without its record (the MCP GetFlag
+    # tool, the admin page).
+    def with_unit_key(unit, unit_key)
+      unit = unit.to_sym
+      raise ArgumentError, "unknown unit :#{unit}" unless @units.key?(unit)
+
+      probe = Unit.new(name: unit, resolver: ->(_context) { unit_key }, key: nil)
+      Registry.new(flags: @flags, tombstones: @tombstones, units: @units.merge(unit => probe), env_resolver: @env_resolver)
+    end
+
     def key?(key)
       @flags.key?(key.to_sym)
     end

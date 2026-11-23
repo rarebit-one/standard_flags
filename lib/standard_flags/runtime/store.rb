@@ -62,8 +62,11 @@ module StandardFlags
     # * rules_attached_to(cohort_key) — keys of rules that attach a cohort.
     # * upsert_members(owner, unit:, unit_keys:, value:, expires_at:)
     #                               — adds live memberships to a Rule or
-    #                                 Cohort, or updates the value and expiry
-    #                                 of live ones; returns { added:, updated: }.
+    #                                 Cohort. A live one whose value or expiry
+    #                                 changes is versioned: marked removed,
+    #                                 and a new row added (so members_at can
+    #                                 read it back); an unchanged one is left
+    #                                 alone. Returns { added:, updated: }.
     # * remove_members(owner, unit:, unit_keys:)
     #                               — sets removed_at on live ones; returns
     #                                 the number removed.
@@ -89,6 +92,22 @@ module StandardFlags
     #                                 lock and changes nothing else on the
     #                                 rule; nil when it didn't run (and should
     #                                 be tried again).
+    #
+    # Operator reads (the MCP tools, the admin page, Restore), outside a
+    # write. Each takes `rule:` (a flag key) or `cohort:` (a cohort key):
+    #
+    # * members(rule:|cohort:, offset:, limit:)
+    #                               — a MemberPage of the owner's memberships
+    #                                 that are not removed (expired ones
+    #                                 included), oldest first, with
+    #                                 created_at set; an empty page when the
+    #                                 owner doesn't exist.
+    # * members_at(at, rule:|cohort:)
+    #                               — the owner's memberships as they were at
+    #                                 `at`: created at or before it, not yet
+    #                                 removed and not yet expired then. Needs
+    #                                 the removed rows, so only as far back as
+    #                                 `config.membership_retention`.
     #
     # Implementations: ActiveRecordStore (the default when runtime rules are
     # on) and MemoryStore (specs, and apps without a database).
@@ -119,6 +138,14 @@ module StandardFlags
 
       def purgeable(before:) # rubocop:disable Lint/UnusedMethodArgument
         raise StoreError, "#{self.class} does not support purge"
+      end
+
+      def members(rule: nil, cohort: nil, offset: 0, limit: nil) # rubocop:disable Lint/UnusedMethodArgument
+        raise StoreError, "#{self.class} does not support listing members"
+      end
+
+      def members_at(_at, rule: nil, cohort: nil) # rubocop:disable Lint/UnusedMethodArgument
+        raise StoreError, "#{self.class} does not support reading past members"
       end
 
       # nil means "not done": a store that doesn't track evaluations.

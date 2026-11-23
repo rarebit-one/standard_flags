@@ -41,6 +41,7 @@ RSpec/DescribeClass:
     - spec/standard_flags/runtime/query_cost_spec.rb
     - spec/standard_flags/runtime/runtime_off_spec.rb
     - spec/standard_flags/runtime/test_helpers_spec.rb
+    - spec/standard_flags/runtime/member_reads_spec.rb
 
 # The conformance specs generate one example per fixture case at load time.
 RSpec/LeakyLocalVariable:

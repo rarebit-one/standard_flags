@@ -9,15 +9,22 @@ module StandardFlags
   module Events
     NAMESPACE = "standard_flags".freeze
 
-    FLAG = %w[started paused stopped ramped variants_set value_set conditions_set members_added members_removed].freeze
-    COHORT = %w[created archived attached detached members_added members_removed].freeze
+    FLAG = %w[started paused stopped ramped variants_set value_set conditions_set members_added members_removed restored].freeze
+    COHORT = %w[created archived attached detached members_added members_removed restored].freeze
 
     FLAG_EVENTS = FLAG.to_h { |verb| [ verb.to_sym, "#{NAMESPACE}.flag.#{verb}".freeze ] }.freeze
     # Membership changes on a cohort publish `standard_flags.cohort.members_*`.
     COHORT_EVENTS = COHORT.to_h { |verb| [ verb.to_sym, "#{NAMESPACE}.cohort.#{verb}".freeze ] }.freeze
 
+    # Operator reads that show what only a reveal may (not changes): unit
+    # keys revealed by list_members, and get_flag evaluated for one unit key
+    # (which says whether it is a member). Counts only, never a key.
+    MEMBERS_REVEALED = "#{NAMESPACE}.members.revealed".freeze
+    FLAG_PROBED = "#{NAMESPACE}.flag.probed".freeze
+    READS = [ MEMBERS_REVEALED, FLAG_PROBED ].freeze
+
     # Every event an audit log should keep: all of them.
-    AUDITABLE = (FLAG_EVENTS.values + COHORT_EVENTS.values).freeze
+    AUDITABLE = (FLAG_EVENTS.values + COHORT_EVENTS.values + READS).freeze
 
     class << self
       # The event names a host should persist to its audit log, as full

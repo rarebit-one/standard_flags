@@ -20,10 +20,18 @@ module StandardFlags
     # flushes them itself. The lock is never replaced (see Cache); Ruby
     # releases a mutex held by a thread that doesn't survive the fork.
     class EvaluationTracker
+      # Set while operator reads evaluate (see #untracked).
+      UNTRACKED = :standard_flags_untracked
+
       def initialize
         @mutex = Mutex.new
         @keys = Set.new
         @flushed_at = nil
+      end
+
+      # Whether evaluations on this thread or fiber are left untracked.
+      def self.untracked?
+        Thread.current[UNTRACKED] ? true : false
       end
 
       def track(key)
@@ -55,6 +63,18 @@ module StandardFlags
         end
       rescue StandardError => e
         failed(e)
+      end
+
+      # Evaluations inside the block (on this thread or fiber) are not
+      # tracked. Operator reads (the MCP tools, the admin page built on
+      # them) evaluate every flag they show, which is not the app using it,
+      # so they must not hide a dead flag from `flags:stale`.
+      def untracked
+        previous = Thread.current[UNTRACKED]
+        Thread.current[UNTRACKED] = true
+        yield
+      ensure
+        Thread.current[UNTRACKED] = previous
       end
 
       def pending

@@ -191,9 +191,119 @@ RSpec.describe StandardFlags::Operations::Audit, registry: OperationHelpers::REG
     expect(StandardFlags::Operations.const_defined?(:AuditWriter, false)).to be(false)
   end
 
+  describe "a reveal of unit keys (record_read)" do
+    def payload
+      { actor: user, actor_label: "OperationHelpers::User:12", reason: "support", key: :new_checkout, revealed: 2, total: 2 }
+    end
+
+    def reveal
+      store.put_rule(:new_checkout, status: :running)
+      store.add_member(rule: :new_checkout, unit: :account, unit_key: "acct-7731", value: true)
+      StandardFlags::MCP.tool("list_members").call({ "key" => "new_checkout", "reveal" => true, "reason" => "support" }, actor: user)
+    end
+
+    it "writes one row through StandardAudit::Operation, and publishes the event" do
+      install_standard_audit
+      events = events_during { described_class.record_read(StandardFlags::Events::MEMBERS_REVEALED, payload) }
+      expect(rows).to eq([ { event: "standard_flags.members.revealed", actor: user, metadata: payload.except(:actor), via: :direct } ])
+      expect(events.map(&:first)).to eq([ "standard_flags.members.revealed" ])
+    end
+
+    it "leaves the row to standard_audit's subscriber when the app subscribes" do
+      audit_config.subscriptions = StandardFlags::Events.auditable
+      install_standard_audit
+      expect(reveal["revealed"]).to be(true)
+      expect(rows.map { |r| [ r[:event], r[:via] ] }).to eq([ [ "standard_flags.members.revealed", :notification ] ])
+      expect_no_unit_keys(rows)
+    end
+
+    it "refuses the reveal when the row can't be written and the app makes that fatal" do
+      audit_config.fail_writes = true
+      audit_config.raise_on_audit_write_error = true
+      install_standard_audit
+      result = reveal
+      expect(result["error"]).to include("code" => "audit_failed")
+      expect_no_unit_keys(result)
+    end
+
+    context "when raise_on_audit_write_error is set (fail closed)" do
+      before { audit_config.raise_on_audit_write_error = true }
+
+      def found_log(found)
+        Class.new do
+          define_singleton_method(:where) { |*| self }
+          define_singleton_method(:exists?) { found }
+        end
+      end
+
+      it "writes the row directly, with an audit_ref, and publishes the event once" do
+        install_standard_audit
+        events = events_during { expect(reveal["revealed"]).to be(true) }
+        expect(rows.map { |r| [ r[:event], r[:via] ] }).to eq([ [ "standard_flags.members.revealed", :direct ] ])
+        expect(rows.first[:metadata][:audit_ref]).to match(/\A\h{8}-\h{4}-/)
+        expect(events.map(&:first)).to eq([ "standard_flags.members.revealed" ])
+      end
+
+      it "reveals once the row is read back, and refuses when it isn't" do
+        install_standard_audit
+        stub_const("StandardAudit::AuditLog", found_log(true))
+        expect(reveal["revealed"]).to be(true)
+        stub_const("StandardAudit::AuditLog", found_log(false))
+        expect(reveal["error"]).to include("code" => "audit_failed", "message" => include("not found after the write"))
+      end
+
+      it "refuses while standard_audit writes rows from a job, which can't be confirmed" do
+        audit_config.define_singleton_method(:async) { true }
+        install_standard_audit
+        expect(reveal["error"]).to eq("code" => "audit_failed", "message" => "standard_audit writes audit rows from a job " \
+                                                                             "(config.async), so this one can't be confirmed; nothing was revealed")
+        expect(rows).to be_empty
+      end
+
+      it "still audits a probe with runtime rules off, outside any store write" do
+        install_standard_audit
+        StandardFlags.config.runtime_rules = false
+        StandardFlags.config.runtime_store = nil
+        result = StandardFlags::MCP.tool("get_flag").call({ "key" => "new_checkout", "unit_key" => "acct-1", "reason" => "x" }, actor: user)
+        expect(result["evaluation"]).to include("unit_key" => "•••t-1")
+        expect(rows.map { |r| r[:event] }).to eq([ "standard_flags.flag.probed" ])
+      end
+
+      it "lets standard_audit's declaration check propagate" do
+        install_standard_audit
+        described_class.writer.audits("something.else")
+        expect { described_class.record_read(StandardFlags::Events::MEMBERS_REVEALED, payload) }
+          .to raise_error(StandardAudit::Operation::DeclarationError)
+      end
+    end
+
+    context "with standard_audit subscribed and a subscriber that raises" do
+      before do
+        audit_config.subscriptions = StandardFlags::Events.auditable
+        install_standard_audit
+        subscriptions << ActiveSupport::Notifications.subscribe("standard_flags.members.revealed") { raise IOError, "disk full" }
+      end
+
+      it "refuses the reveal when that is fatal" do
+        audit_config.raise_on_audit_write_error = true
+        expect(reveal["error"]).to eq("code" => "audit_failed", "message" => "the audit row could not be written (IOError); nothing was revealed")
+      end
+
+      it "reveals and reports the lost row otherwise" do
+        result = nil
+        errors = collect_errors { result = reveal }
+        expect(result["revealed"]).to be(true)
+        expect(errors.reports.map { |r| r[:error].message }).to eq([ "the audit row for standard_flags.members.revealed was not written (IOError)" ])
+      end
+    end
+  end
+
   it "lists every event as auditable" do
-    expect(StandardFlags::Events.auditable).to all(start_with("standard_flags.flag.").or(start_with("standard_flags.cohort.")))
-    expect(StandardFlags::Events.auditable.size).to eq(15)
+    expect(StandardFlags::Events.auditable - [ "standard_flags.members.revealed" ])
+      .to all(start_with("standard_flags.flag.").or(start_with("standard_flags.cohort.")))
+    expect(StandardFlags::Events.auditable).to include("standard_flags.flag.restored", "standard_flags.cohort.restored",
+                                                       "standard_flags.flag.probed")
+    expect(StandardFlags::Events.auditable.size).to eq(19)
     expect(StandardFlags::Events.auditable).to be_frozen
   end
 end

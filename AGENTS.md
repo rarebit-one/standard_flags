@@ -55,14 +55,16 @@ lib/standard_flags/
 ├── controller.rb / job.rb          # requires_flag guards (autoloaded)
 ├── diagnostics.rb / health_check.rb# Diagnostics hash; opt-in standard_health check
 ├── runtime.rb + runtime/            # Runtime rules: stores, cache, resolver, evaluation tracker
-├── operations.rb + operations/     # The write path: audited operations, validation, audit
+├── operations.rb + operations/     # The write path: audited operations, validation, audit, restore
+├── mcp.rb + mcp/                   # Operator tools (list/get/write flags, members, cohorts); no MCP framework
+├── audit_trail.rb                  # Reads write-path history back from standard_audit's audit_logs
 ├── result.rb / actor.rb / events.rb# Operation results, system actors, published event names
 ├── purge_job.rb                    # Membership purge (autoloaded; needs activejob)
 ├── tooling.rb + tooling/           # list / stale / refs / manifest / typescript / show / changes
 ├── notifiers/                      # Logger, Sentry, Metrics subscribers
 └── engine.rb                       # Executor hook, registry loading, subscribers, rake tasks
 lib/tasks/standard_flags.rake
-lib/generators/standard_flags/install/
+lib/generators/standard_flags/install/    # install, migrations, admin (controller, routes, Inertia pages)
 spec/fixtures/conformance/          # Shared evaluation fixtures (language-neutral)
 ```
 
@@ -85,7 +87,8 @@ spec/fixtures/conformance/          # Shared evaluation fixtures (language-neutr
 - **Unit keys never leave the memberships table.** No unit key in a Result,
   an audit row, a notification, a log line or an error report; membership
   changes record the unit, the value and counts. Store errors carry only the
-  error class.
+  error class. Operator surfaces (MCP tools, the admin page) mask them
+  (`•••4567`); only an audited reveal shows them.
 
 ## Testing
 

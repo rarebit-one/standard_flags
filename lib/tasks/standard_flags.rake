@@ -47,6 +47,9 @@ namespace :flags do
     task(remove: :environment) { run_change.call(:members_remove) }
   end
 
+  desc "Restore rules and memberships as they were at AT (from the audit log): AT= [KEYS=a,b,cohort:x] [APPLY=1] REASON="
+  task(restore: :environment) { run_change.call(:restore) }
+
   desc "Delete memberships removed or expired longer ago than config.membership_retention: REASON="
   task(purge: :environment) { run_change.call(:purge) }
 

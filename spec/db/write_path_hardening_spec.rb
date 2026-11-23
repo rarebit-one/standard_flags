@@ -158,6 +158,73 @@ RSpec.describe "write path hardening on Postgres", :db, registry: OperationHelpe
     end
   end
 
+  # The reads that need an audit row (a reveal, a probe of one unit key)
+  # fail closed under raise_on_audit_write_error, on the recommended setup
+  # too: standard_audit subscribed, whose subscriber rescues a failed write.
+  describe "a reveal when standard_audit's subscriber swallows a failed audit insert" do
+    before do
+      op!(ops::Ramp, :new_checkout, bps: 0)
+      op!(ops::AddMembers, :new_checkout, keys: %w[acct-7731])
+      StandardFlags.config.authorize = ->(*) { true }
+    end
+
+    def admin
+      OperationHelpers::User.new(1)
+    end
+
+    def reveal
+      StandardFlags::MCP.tool("list_members").call({ "key" => "new_checkout", "reveal" => true, "reason" => "support" }, actor: admin)
+    end
+
+    def probe
+      StandardFlags::MCP.tool("get_flag").call({ "key" => "new_checkout", "unit_key" => "acct-7731", "reason" => "support" }, actor: admin)
+    end
+
+    it "reveals nothing when raise_on_audit_write_error is set, as a write in the same setup is refused" do
+      subscribe_standard_audit(raise_on_audit_write_error: true) { connection.execute("INSERT INTO audit_logs_missing VALUES (1)") }
+      expect(op(ops::SetValue, :new_checkout, value: true).code).to eq(:audit_failed)
+      expect(reveal).to eq("error" => { "code" => "audit_failed",
+                                        "message" => "the audit row could not be written (ActiveRecord::StatementInvalid); nothing was revealed" })
+      expect(probe).to eq("error" => { "code" => "audit_failed",
+                                       "message" => "the audit row could not be written (ActiveRecord::StatementInvalid); nothing was evaluated" })
+      expect(state_revision).to eq(models::State.pick(:revision)) # the read wrote nothing of its own
+    end
+
+    it "reveals when the row is written, in the same savepoint" do
+      connection.execute("CREATE TEMPORARY TABLE spec_audit_rows (event text)")
+      subscribe_standard_audit(raise_on_audit_write_error: true) { |name| connection.exec_query("INSERT INTO spec_audit_rows VALUES ($1)", "spec", [ name ]) }
+      expect(reveal["members"].map { |m| m["unit_key"] }).to eq(%w[acct-7731])
+      expect(probe["evaluation"]).to include("unit_key" => "•••7731")
+      expect(connection.select_values("SELECT event FROM spec_audit_rows")).to eq(%w[standard_flags.members.revealed standard_flags.flag.probed])
+    ensure
+      connection.execute("DROP TABLE IF EXISTS spec_audit_rows")
+    end
+
+    it "reveals nothing when the row can't be read back (a failure swallowed before the database)" do
+      subscribe_standard_audit(raise_on_audit_write_error: true) { nil }
+      log = Class.new do
+        def self.where(*) = self
+        def self.exists? = false
+      end
+      stub_const("StandardAudit::AuditLog", log)
+      expect(reveal["error"]).to eq("code" => "audit_failed",
+                                    "message" => "the audit row could not be written (not found after the write); nothing was revealed")
+    end
+
+    it "refuses a reveal while standard_audit writes rows from a job" do
+      subscribe_standard_audit(raise_on_audit_write_error: true) { nil }
+      config = StandardAudit.config
+      stub_const("StandardAudit", Module.new { define_singleton_method(:config) { config.to_h.merge(async: true).then { |h| Struct.new(*h.keys).new(*h.values) } } })
+      StandardAudit.const_set(:Operation, Module.new)
+      expect(reveal["error"]["message"]).to start_with("standard_audit writes audit rows from a job (config.async)")
+    end
+
+    it "reveals and reports the lost row by default" do
+      subscribe_standard_audit { connection.execute("INSERT INTO audit_logs_missing VALUES (1)") }
+      expect(reveal["revealed"]).to be(true)
+    end
+  end
+
   describe "a missing standard_flags_state row (a database loaded from schema.rb)" do
     before { models::State.delete_all }
 
@@ -284,7 +351,9 @@ RSpec.describe "write path hardening on Postgres", :db, registry: OperationHelpe
     purging = in_thread { StandardFlags::Runtime.purge! }
 
     expect([ adding.value.success?, purging.value ]).to eq([ true, { removed: 0, expired: 0 } ])
-    expect(models::Membership.where(rule_id: rule_id).pluck(:unit_key, :expires_at)).to eq([ [ "x1", nil ] ])
+    expect(models::Membership.where(rule_id: rule_id, removed_at: nil).pluck(:unit_key, :expires_at)).to eq([ [ "x1", nil ] ])
+    # The changed membership is versioned: its old row is kept, removed, for Restore.
+    expect(models::Membership.where(rule_id: rule_id).where.not(removed_at: nil).count).to eq(1)
   end
 
   it "fails the second of two concurrent CreateCohort calls on one key with :already_exists" do

@@ -5,6 +5,8 @@ require "standard_flags/operations/base"
 require "standard_flags/operations/rules"
 require "standard_flags/operations/members"
 require "standard_flags/operations/cohorts"
+require "standard_flags/operations/restore_target"
+require "standard_flags/operations/restore"
 
 module StandardFlags
   # The write path for runtime rules. Every change to a rule, cohort or
