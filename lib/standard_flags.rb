@@ -38,10 +38,6 @@ require "standard_flags/tooling"
 require "standard_flags/health_contribution"
 require "standard_flags/engine" if defined?(::Rails::Engine)
 
-# standard_health 0.9+ registers this check by default and lists forbidden
-# pins on /diagnostics/env. Runs at require time, before app initializers.
-ActiveSupport.on_load(:standard_health, &StandardFlags::HealthContribution::HOOK)
-
 module StandardFlags
   # Loaded on first reference: they need actionpack, activejob (Job and
   # PurgeJob) and standard_health respectively, which the host brings.
@@ -166,3 +162,9 @@ module StandardFlags
     end
   end
 end
+
+# standard_health 0.9+ registers this check by default and lists forbidden
+# pins on /diagnostics/env. Registered last: when standard_health has already
+# run its load hooks, ActiveSupport runs this hook immediately, so everything
+# the hook calls (StandardFlags.registry, .config) must already be defined.
+ActiveSupport.on_load(:standard_health, &StandardFlags::HealthContribution::HOOK)
