@@ -60,9 +60,9 @@ module StandardFlags
       end
     end
 
-    # `flags:stale`: flags past their remove_by date. Each one's `final:`
-    # value says which branch to keep when deleting it. Permanent flags have
-    # no remove_by date, so they never appear.
+    # `flags:stale`: flags and modes past their remove_by date. Each one's
+    # `final:` value says which branch to keep when deleting it. Permanent
+    # flags have no remove_by date, so they never appear.
     class Stale
       def initialize(registry: StandardFlags.registry, today: Date.today)
         @registry = registry
@@ -150,9 +150,10 @@ module StandardFlags
 
     # `standard_flags:manifest`: a deterministic description of the flag set
     # (keys, wire names, kinds, values, audiences, defaults) for client CI.
-    # Entries of kind `flag` also say whether the flag is permanent.
+    # Entries of kind `flag` and `mode` also say whether they are permanent.
     class Manifest
       VERSION = 1
+      LIFECYCLE_KINDS = %i[flag mode].freeze
 
       def initialize(registry: StandardFlags.registry)
         @registry = registry
@@ -183,7 +184,7 @@ module StandardFlags
           "default" => default(definition),
           "audiences" => definition.expose.sort.to_h { |audience, name| [ audience.to_s, name ] }
         }
-        entry["permanent"] = definition.permanent? if definition.kind == :flag
+        entry["permanent"] = definition.permanent? if LIFECYCLE_KINDS.include?(definition.kind)
         entry
       end
 

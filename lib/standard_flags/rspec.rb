@@ -26,7 +26,12 @@ require "standard_flags"
 # guards, ENV pins and defaults: prove a guard with a real ENV pin, not an
 # override. Runtime rules sit below overrides and pins, so `with_flag` beats
 # `with_rule`. Unknown keys and values outside the declaration raise, unknown
-# keys raise on read (strict mode), and everything resets after each example.
+# keys raise on read (strict mode), and everything resets around each example.
+#
+# Any of these may be set in the example, in a `before` hook, or in an
+# `around` hook that wraps `example.run`:
+#
+#   around { |example| with_flag(:new_checkout, true) { example.run } }
 module StandardFlags
   module TestHelpers
     def with_flag(key, value, &)
@@ -62,20 +67,46 @@ module StandardFlags
       StandardFlags::Testing.override(key, value, kind: kind)
     end
   end
+
+  # Wires the helpers into an RSpec configuration. `require
+  # "standard_flags/rspec"` calls it on RSpec's own; call it directly only
+  # for a custom or sandboxed configuration.
+  #
+  # The reset is an `around` hook, not `before`/`after`: config-level
+  # `around` hooks wrap every group-level one, and `before` hooks run inside
+  # `example.run`, so a reset in `before` would discard what a spec's own
+  # `around { |ex| with_flag(:x, true) { ex.run } }` had just set. `flags:`
+  # metadata is applied in `before`, so it works as before and wins over an
+  # `around` override of the same key.
+  module RSpecSupport
+    module_function
+
+    def install(config)
+      config.include TestHelpers
+      config.around { |example| RSpecSupport.isolate(example) }
+      config.before { |example| RSpecSupport.apply_metadata(example) }
+    end
+
+    def isolate(example)
+      unless Testing.overrides.empty? && Testing.runtime_store.nil?
+        raise Error, "standard_flags test overrides were set before the example started (in before(:context), " \
+                     "at load time, or in a config.around hook registered before require \"standard_flags/rspec\"); " \
+                     "they would be discarded. Set them inside the example, in a before hook, or in a group-level around hook"
+      end
+
+      Testing.reset!
+      example.run
+    ensure
+      Testing.reset!
+    end
+
+    def apply_metadata(example)
+      Array(example.metadata[:flags]).each { |key, value| Testing.override(key, value) }
+    end
+  end
 end
 
 StandardFlags::Testing.activate!
 StandardFlags.config.strict = true
 
-RSpec.configure do |config|
-  config.include StandardFlags::TestHelpers
-
-  config.before do |example|
-    StandardFlags::Testing.reset!
-    Array(example.metadata[:flags]).each { |key, value| StandardFlags::Testing.override(key, value) }
-  end
-
-  config.after do
-    StandardFlags::Testing.reset!
-  end
-end
+RSpec.configure { |config| StandardFlags::RSpecSupport.install(config) }

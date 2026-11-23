@@ -98,7 +98,7 @@ end
 |------|--------|---------|---------|
 | `flag` | on / off | off | Temporary release flags: `remove_by:` and `final:` are required. With `permanent: true`, a standing switch instead (see below). |
 | `kill_switch` | on / off | on, fails open | Permanent switches that turn a feature off in an emergency. |
-| `mode` | declared values | first value | Staged rollouts. Presets: `:sensor` (off/sensor/on), `:cutover` (off/allowlist/all), `:shadow` (off/shadow/enforce); or `values:`. |
+| `mode` | declared values | first value | Staged rollouts. Presets: `:sensor` (off/sensor/on), `:cutover` (off/allowlist/all), `:shadow` (off/shadow/enforce); or `values:`. May declare `remove_by:` with `final:`, or `permanent: true`. |
 | `experiment` | declared variants | first variant | Experiments. Resolves to its first variant (list `control` first) unless pinned by ENV or split by a runtime rule's variant weights. |
 | `compat` | on / off | on | Compatibility shims that stay on until they are removed. |
 | `tombstone` | — | — | A removed key. It can never be declared again. |
@@ -112,17 +112,21 @@ end
 | `default:` | A value, or `{ env_name => value }`. Environments not listed get the kind's default. |
 | `env:` | Legacy environment variable name(s) still honoured. See [Environment variables](#environment-variables). |
 | `inverted:` | The legacy name is a `*_DISABLED` variable: legacy on means flag off. |
+| `legacy_parser:` | `:strict` (default) or `:exact`: how legacy `env:` values are read. See [Exact legacy readers](#exact-legacy-readers). |
+| `legacy_true:` | With `legacy_parser: :exact` on an on/off kind, the exact values that mean on. Default `%w[on]`. |
 | `forbidden_in:` | Environment name(s) where the flag is forced off. A pin that tries to turn it on is reported once per process. |
 | `fail:` | The value returned if evaluation raises. Kill switches default to on. |
 | `expose:` | `{ audience => wire_name }`, or a list of audiences to use the key. Default: not exposed. |
 | `unit:` | The unit the flag targets. [Runtime rules](#runtime-rules) match members, cohorts and percentages on this unit's key. |
 | `bucketing:` | On `flag`, `mode` and `experiment`: `{ version: 1 \| 2, salt: "..." }`, for a flag migrated from another system that must keep its old buckets. Needs `unit:`. |
-| `remove_by:`, `final:` | On `flag`: the date it should be gone, and the value it settles on. |
-| `permanent:` | On `flag`: `true` for a standing switch with no `remove_by:`/`final:`. |
+| `remove_by:`, `final:` | On `flag` (required) and `mode` (optional, together): the date it should be gone, and the value it settles on. A mode's `final:` must be one of its values. |
+| `permanent:` | On `flag` and `mode`: `true` for a standing switch with no `remove_by:`/`final:`. |
 
 The registry is validated when it loads. `StandardFlags::DefinitionError` is
 raised for a reused tombstoned key, a missing owner, a `flag` without
-`remove_by:`/`final:` (or a `permanent: true` flag with either), a default outside a mode's values, the same wire name
+`remove_by:`/`final:` (or a `permanent: true` flag or mode with either), a mode with only one of
+`remove_by:`/`final:` or a `final:` outside its values, a `legacy_parser: :exact` without a legacy `env:`
+name, a default outside a mode's values, the same wire name
 used twice for one audience, an undeclared unit, a malformed `bucketing:` or
 unit `key:`, or any unknown attribute.
 
@@ -140,7 +144,7 @@ name (`for: user` when `user.account` exists).
 
 Some switches are never meant to be removed: environment permissions such as
 demo pages, setup screens, or permission to send real messages outside
-production. Declare them as a `flag` with `permanent: true`:
+production. Declare them as a `flag` (or a `mode`) with `permanent: true`:
 
 ```ruby
 flag :demo_pages, owner: "platform", permanent: true,
@@ -438,14 +442,16 @@ when it is first written, and its salt never changes afterwards.
 Every flag can be pinned with its canonical variable, `STANDARD_FLAGS_<KEY>`
 (the key upcased): `STANDARD_FLAGS_NEW_CHECKOUT=on`.
 
-One strict parser reads every value, trimmed and case-insensitive:
+One strict parser reads every value, trimmed and case-insensitive (a flag
+may opt its legacy names into [exact reading](#exact-legacy-readers)):
 
 - on/off kinds: `on`/`off`, `true`/`false`, `1`/`0`, `yes`/`no`;
 - modes: a declared value; experiments: a declared variant.
 
 Anything else is ignored and reported once per process per variable, through
 `Rails.error.report(handled: true)` and a `pin_rejected.standard_flags`
-notification. A blank value counts as unset.
+notification. A blank value counts as unset (except under
+[exact reading](#exact-legacy-readers), where a blank legacy on/off value pins off).
 
 ### Legacy names
 
@@ -468,6 +474,37 @@ strict parser doesn't accept are ignored. A legacy `ENV["X_DISABLED"].present?`
 check treated `X_DISABLED=false` as disabled; with `inverted: true` it now
 means enabled. Call that out when migrating a flag.
 
+### Exact legacy readers
+
+Some legacy readers were exact, `ENV["X"] == "on"`, and code that destroys
+data may rely on that: `X=true` or `X=ON` never turned it on. To keep an
+exact reader's meaning, declare `legacy_parser: :exact`:
+
+```ruby
+flag :purge_inactive, owner: "platform", permanent: true,
+     env: "ACME_PURGE_INACTIVE", legacy_parser: :exact
+flag :bulk_export, owner: "reporting", permanent: true,
+     env: "ACME_BULK_EXPORT", legacy_parser: :exact, legacy_true: %w[on enabled]
+mode :strict_gates, owner: "platform", preset: :sensor,
+     env: "ACME_STRICT_GATES", legacy_parser: :exact
+```
+
+- It applies to legacy `env:` names only. The canonical
+  `STANDARD_FLAGS_<KEY>` pin is always read by the strict parser.
+- On/off kinds: a value in `legacy_true:` (default `%w[on]`) means on; any
+  other non-blank value pins off, as the old reader did, and is never
+  reported as rejected. `inverted: true` still flips the result.
+- Modes and experiments: a value matches only if it equals a declared value
+  exactly (case-sensitive, no trimming); anything else is rejected and
+  reported like any unparseable pin.
+- Matching does no trimming or case folding.
+- A legacy variable that is set but blank (`X=""`, `X=" "`) pins an on/off
+  flag off, as `ENV["X"] == "on"` did, so blanking the variable disarms the
+  flag even when a runtime rule or default would serve on. Only an unset
+  variable falls through. Two exceptions keep blank as unset: an `inverted:`
+  name (pinning it would turn the flag on) and modes and experiments, where
+  no value is "off". The canonical pin always treats blank as unset.
+
 ## Sensor rollouts
 
 For a mode declared with `preset: :sensor`:
@@ -483,7 +520,10 @@ end
 - **sensor**: `observe` runs and its result goes into a
   `sensor.standard_flags` notification; returns the observation. An
   exception in `observe` is reported and swallowed, since sensor mode must
-  not change behaviour.
+  not change behaviour. For a probe whose errors are expected, pass
+  `report: false` (`StandardFlags.sensor(:strict_gates, for: run, report:
+  false)`): the error is still swallowed and its class still rides on the
+  notification (and the Logger line), but nothing is reported.
 - **on**: `observe` runs, the notification fires, then `enforce` receives the
   observation; returns `enforce`'s result. Exceptions propagate.
 
@@ -612,9 +652,9 @@ end
 | Task | What it does |
 |------|--------------|
 | `bin/rails flags:list` | Every flag with its value, reason, deciding env var and remove_by (`permanent` for permanent flags). |
-| `bin/rails flags:stale` | Flags past `remove_by`, with the `final:` value to keep. Permanent flags never appear. |
+| `bin/rails flags:stale` | Flags and modes past `remove_by`, with the `final:` value to keep. Permanent ones never appear. |
 | `bin/rails flags:refs` | Scans `config.refs_paths` (default `app lib config`) for `on?(:k`, `off?(:k`, `mode(:k`, `variant(:k`, `evaluate(:k`, `requires_flag :k` and string keys. Exits non-zero for undeclared or tombstoned keys; warns for declared flags nothing reads. Run it in CI. |
-| `bin/rails standard_flags:manifest` | Writes `config/flags.manifest.json`: keys, wire names, kinds, values, audiences and defaults (and `permanent` on entries of kind `flag`), deterministically. Commit it. |
+| `bin/rails standard_flags:manifest` | Writes `config/flags.manifest.json`: keys, wire names, kinds, values, audiences and defaults (and `permanent` on entries of kind `flag` and `mode`), deterministically. Commit it. |
 | `bin/rails standard_flags:typescript` | Writes a `.d.ts` with a `Features` interface per audience (`WebFeatures`, `MobileFeatures`, …) keyed by wire name. |
 
 ## Observability
@@ -733,7 +773,21 @@ version 2. Values are checked against the declaration.
 Overrides are the first evaluation layer, so they beat guards, ENV pins,
 runtime rules and defaults without touching `ENV`. Unknown keys, wrong kinds and undeclared
 values raise; unknown keys raise on read too (strict mode); everything resets
-after each example.
+around each example.
+
+Every helper works in the example, in a `before` hook, or in an `around`
+hook that wraps `example.run`:
+
+```ruby
+around { |example| with_flag(:new_checkout, true) { example.run } }
+```
+
+The reset runs in a config-level `around` hook, outside every group-level
+one. Overrides set before an example starts (in `before(:context)`, at load
+time, or in a `config.around` registered before `require
+"standard_flags/rspec"`) would be discarded, so the example fails with an
+error that says so. `flags:` metadata is applied in `before`, so it wins
+over an `around` override of the same key.
 
 ### Testing a guard
 

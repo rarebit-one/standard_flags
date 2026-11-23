@@ -16,11 +16,12 @@ module StandardFlags
       shadow: %i[off shadow enforce]
     }.freeze
 
-    COMMON_ATTRIBUTES = %i[owner description default env inverted forbidden_in fail expose unit].freeze
+    COMMON_ATTRIBUTES = %i[owner description default env inverted legacy_parser legacy_true forbidden_in fail
+                           expose unit].freeze
     ATTRIBUTES = {
       flag: COMMON_ATTRIBUTES + %i[remove_by final permanent bucketing],
       kill_switch: COMMON_ATTRIBUTES,
-      mode: COMMON_ATTRIBUTES + %i[preset values bucketing],
+      mode: COMMON_ATTRIBUTES + %i[preset values remove_by final permanent bucketing],
       experiment: COMMON_ATTRIBUTES + %i[variants bucketing],
       compat: COMMON_ATTRIBUTES + %i[remove_by]
     }.freeze
@@ -30,13 +31,21 @@ module StandardFlags
     WIRE_FORMAT = /\A[A-Za-z][A-Za-z0-9_]*\z/
     HASH_VERSIONS = [ 1, 2 ].freeze
 
+    # How legacy `env:` values are read. :strict is the one strict parser;
+    # :exact reproduces a hand-written `ENV["X"] == "on"` reader. Neither
+    # applies to the canonical STANDARD_FLAGS_<KEY> pin, which is always
+    # strict.
+    LEGACY_PARSERS = %i[strict exact].freeze
+    DEFAULT_LEGACY_TRUE = %w[on].freeze
+
     # A declared `bucketing: { version:, salt: }`, for a flag migrated from
     # another system that must keep its old buckets. Copied into the flag's
     # runtime rule when the rule is first created.
     Bucketing = Data.define(:version, :salt)
 
     attr_reader :key, :kind, :owner, :description, :env, :inverted, :forbidden_in,
-                :expose, :unit, :remove_by, :final, :values, :variants, :permanent, :bucketing
+                :expose, :unit, :remove_by, :final, :values, :variants, :permanent, :bucketing,
+                :legacy_parser, :legacy_true
 
     def initialize(kind, key, attributes)
       @kind = kind.to_sym
@@ -65,8 +74,8 @@ module StandardFlags
       kind == :kill_switch
     end
 
-    # A `flag` declared `permanent: true`: a standing switch (an environment
-    # permission, say) with no remove_by: or final:, never stale.
+    # A `flag` or `mode` declared `permanent: true`: a standing switch (an
+    # environment permission, say) with no remove_by: or final:, never stale.
     def permanent?
       permanent
     end
@@ -176,6 +185,9 @@ module StandardFlags
       @description = attributes[:description]&.to_s
       @env = Array(attributes[:env]).map(&:to_s).freeze
       @inverted = attributes.fetch(:inverted, false)
+      @legacy_parser = attributes.fetch(:legacy_parser, :strict)
+      @legacy_parser = @legacy_parser.to_sym if @legacy_parser.respond_to?(:to_sym)
+      @legacy_true = normalize_legacy_true(attributes)
       @forbidden_in = Array(attributes[:forbidden_in]).map(&:to_s).freeze
       @expose = normalize_expose(attributes[:expose])
       @unit = attributes[:unit]&.to_sym
@@ -192,20 +204,27 @@ module StandardFlags
 
     def validate!
       fail!("is missing owner:") if owner.nil? || owner.strip.empty?
-      validate_flag_lifecycle!
+      validate_lifecycle!
       validate_env!
+      validate_legacy_parser!
       validate_forbidden_in!
       fail!("bucketing: needs a unit: to bucket") if bucketing && unit.nil?
     end
 
-    def validate_flag_lifecycle!
-      return unless kind == :flag
-
+    # Flags must declare a lifecycle: remove_by: and final:, or permanent:.
+    # Modes may: remove_by: and final: together, or permanent:, or neither.
+    def validate_lifecycle!
       fail!("permanent: must be true or false") unless [ true, false ].include?(permanent)
       return validate_permanent! if permanent
 
-      fail!("is missing remove_by: (release flags are temporary; declare permanent: true for a standing switch)") if remove_by.nil?
-      fail!("is missing final: (the value it settles on when removed)") if @final.nil?
+      case kind
+      when :flag
+        fail!("is missing remove_by: (release flags are temporary; declare permanent: true for a standing switch)") if remove_by.nil?
+        fail!("is missing final: (the value it settles on when removed)") if @final.nil?
+      when :mode
+        fail!("has remove_by: but is missing final: (the value it settles on when removed)") if remove_by && @final.nil?
+        fail!("has final: but is missing remove_by:") if remove_by.nil? && !@final.nil?
+      end
     end
 
     def validate_permanent!
@@ -229,6 +248,27 @@ module StandardFlags
 
         fail!("defaults to #{default_for(env_name).inspect} in #{env_name}, where it is forbidden_in:")
       end
+    end
+
+    def validate_legacy_parser!
+      fail!("legacy_parser: must be one of #{LEGACY_PARSERS.inspect}") unless LEGACY_PARSERS.include?(legacy_parser)
+      fail!("legacy_parser: needs a legacy env: name") if legacy_parser == :exact && env.empty?
+      return if @legacy_true.nil? || @legacy_true.equal?(DEFAULT_LEGACY_TRUE)
+
+      fail!("legacy_true: needs legacy_parser: :exact") unless legacy_parser == :exact
+      fail!("legacy_true: only applies to on/off kinds") unless boolean?
+      return unless @legacy_true.empty? || @legacy_true.any? { |word| word.strip.empty? }
+
+      fail!("legacy_true: must list at least one non-blank value")
+    end
+
+    # The exact legacy values that mean on, for an on/off kind read with
+    # `legacy_parser: :exact`; nil otherwise (unless declared, so validation
+    # can reject it).
+    def normalize_legacy_true(attributes)
+      return Array(attributes[:legacy_true]).map(&:to_s).freeze if attributes.key?(:legacy_true)
+
+      DEFAULT_LEGACY_TRUE if @legacy_parser == :exact && boolean?
     end
 
     def invalid_variants?

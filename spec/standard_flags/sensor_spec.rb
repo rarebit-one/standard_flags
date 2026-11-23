@@ -51,6 +51,31 @@ RSpec.describe StandardFlags::Sensor do
     end
   end
 
+  it "swallows an expected observe error without reporting it with report: false" do
+    with_mode(:strict_gates, :sensor) do
+      events = nil
+      collector = collect_errors do
+        events = capture_events do
+          expect(StandardFlags.sensor(:strict_gates, report: false) { |s| s.observe { raise "probe failed" } }).to be_nil
+        end
+      end
+      expect(collector.reports).to be_empty
+      expect(events.first.last).to include(observed: nil, error_class: "RuntimeError")
+    end
+  end
+
+  it "still lets an observe error propagate when on with report: false" do
+    with_mode(:strict_gates, :on) do
+      expect { StandardFlags.sensor(:strict_gates, report: false) { |s| s.observe { raise "probe failed" } } }
+        .to raise_error("probe failed")
+    end
+  end
+
+  it "takes only true or false for report:" do
+    expect { StandardFlags.sensor(:strict_gates, report: nil) { |s| s.observe { 1 } } }
+      .to raise_error(ArgumentError, /report: must be true or false/)
+  end
+
   it "lets an observe error propagate when on" do
     with_mode(:strict_gates, :on) do
       expect { StandardFlags.sensor(:strict_gates) { |s| s.observe { raise "probe failed" } } }.to raise_error("probe failed")
