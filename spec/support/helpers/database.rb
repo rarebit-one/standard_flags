@@ -27,7 +27,38 @@ module DatabaseHelpers
     connection = ActiveRecord::Base.connection
     TABLES.each { |table| connection.drop_table(table, if_exists: true) }
     run_generated_migration(:up)
+    create_audit_logs(connection)
     @prepared = true
+  end
+
+  # standard_audit's audit_logs table (the columns of its install
+  # migration), for the specs that read the write path's history back
+  # through its query API. Created only when missing, so a database that
+  # already has the real table keeps it.
+  def create_audit_logs(connection)
+    return if connection.table_exists?(:audit_logs)
+
+    connection.create_table :audit_logs, id: :uuid do |t|
+      t.string :actor_gid
+      t.string :actor_type
+      t.string :target_gid
+      t.string :target_type
+      t.string :scope_gid
+      t.string :scope_type
+      t.string :event_type, null: false
+      t.string :request_id
+      t.string :ip_address
+      t.text :user_agent
+      t.string :session_id
+      t.jsonb :metadata, default: {}
+      t.datetime :occurred_at, null: false
+      t.string :checksum, limit: 64
+      t.string :previous_checksum, limit: 64
+      t.datetime :anonymized_at
+      t.timestamps
+      t.index [ :occurred_at, :created_at ]
+      t.index :event_type
+    end
   end
 
   def run_generated_migration(direction, destination: File.expand_path("../../../tmp/db_migration", __dir__))
@@ -47,7 +78,7 @@ module DatabaseHelpers
 
   def clean!
     connection = ActiveRecord::Base.connection
-    connection.execute("TRUNCATE #{TABLES.join(', ')} RESTART IDENTITY CASCADE")
+    connection.execute("TRUNCATE #{(TABLES + %w[audit_logs]).join(', ')} RESTART IDENTITY CASCADE")
     connection.execute("INSERT INTO standard_flags_state (revision) VALUES (0)")
   end
 

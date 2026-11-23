@@ -52,6 +52,36 @@ module StandardFlags
         end
       end
 
+      # Two queries (the owner's id, then the page) and a count. Unit keys
+      # are read but never put into SQL text.
+      def members(rule: nil, cohort: nil, offset: 0, limit: nil)
+        read("member listing", quote: false) do
+          scope = owner_scope(rule, cohort)
+          next MemberPage.new(memberships: [], total: 0) unless scope
+
+          live = scope.where(removed_at: nil)
+          page = live.order(:created_at, :id).offset(offset)
+          page = page.limit(limit) if limit
+          MemberPage.new(memberships: page.pluck(*MEMBERSHIP_COLUMNS, :created_at).map { |row| membership(row) },
+                         total: live.count)
+        end
+      end
+
+      # Rows removed (or expired) since `at` are still here until purge, so
+      # this reads the table as it was then.
+      def members_at(at, rule: nil, cohort: nil)
+        read("past member read", quote: false) do
+          scope = owner_scope(rule, cohort)
+          next [] unless scope
+
+          scope.where(created_at: ..at)
+               .where("removed_at IS NULL OR removed_at > ?", at)
+               .where("expires_at IS NULL OR expires_at > ?", at)
+               .order(:created_at, :id)
+               .pluck(*MEMBERSHIP_COLUMNS, :created_at).map { |row| membership(row) }
+        end
+      end
+
       # false when a table is missing; raises (so the health check warns
       # instead of failing) when the database can't be reached.
       def ready?
@@ -231,13 +261,19 @@ module StandardFlags
           Models::Rule.where("cohorts @> ?", [ { cohort: cohort_key.to_s } ].to_json).order(:key).pluck(:key).map(&:to_sym)
         end
 
+        # A live membership whose value or expiry changes is versioned, not
+        # edited: its row is marked removed and a new one inserted, so
+        # members_at (Restore) reads the value it had at any time within the
+        # retention. Re-adding it unchanged writes nothing.
         def upsert_members(owner, unit:, unit_keys:, value:, expires_at:)
           live = members_of(owner).where(unit: unit.to_s, unit_key: unit_keys)
-          existing = live.pluck(:unit_key)
+          existing = live.pluck(:unit_key, :value, :expires_at)
           now = Time.now.utc
-          live.update_all(value: value, expires_at: expires_at, updated_at: now) unless existing.empty?
-          fresh = unit_keys - existing
-          insert_members(owner, fresh, unit: unit.to_s, value: value, expires_at: expires_at, now: now) unless fresh.empty?
+          changed = existing.reject { |_, current, until_at| current == value && until_at&.round(6) == expires_at&.round(6) }.map(&:first)
+          live.where(unit_key: changed).update_all(removed_at: now, updated_at: now) unless changed.empty?
+          fresh = unit_keys - existing.map(&:first)
+          inserts = fresh + changed
+          insert_members(owner, inserts, unit: unit.to_s, value: value, expires_at: expires_at, now: now) unless inserts.empty?
           recount(owner)
           { added: fresh.size, updated: existing.size }
         end
@@ -368,7 +404,16 @@ module StandardFlags
 
       def membership(row)
         attributes = MEMBERSHIP_COLUMNS.zip(row).to_h
+        attributes[:created_at] = row[MEMBERSHIP_COLUMNS.size] if row.size > MEMBERSHIP_COLUMNS.size
         Membership.new(**attributes, unit: attributes[:unit].to_sym)
+      end
+
+      # The memberships of one rule or cohort, or nil when it doesn't exist.
+      def owner_scope(rule, cohort)
+        raise ArgumentError, "pass exactly one of rule: or cohort:" unless rule.nil? ^ cohort.nil?
+
+        id = rule ? Models::Rule.where(key: rule.to_s).pick(:id) : Models::Cohort.where(key: cohort.to_s).pick(:id)
+        id && Models::Membership.where((rule ? :rule_id : :cohort_id) => id)
       end
 
       def read(what, quote: true, &)

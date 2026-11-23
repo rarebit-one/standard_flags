@@ -136,7 +136,21 @@ RSpec.describe StandardFlags::Tooling do
           mobile: MobileFeatures;
           web: WebFeatures;
         };
+
+        export type FlagKey = "ai_assistant" | "new_checkout" | "strict_gates";
+
+        export type FlagValues = {
+          readonly ai_assistant: "on" | "off";
+          readonly new_checkout: "on" | "off";
+          readonly strict_gates: "off" | "sensor" | "on";
+        };
+
+        #{StandardFlags::Tooling::TypeScript::MCP_TYPES.chomp}
       TS
+    end
+
+    it "types an empty registry's keys as never" do
+      expect(described_class.new(registry: StandardFlags::Registry.empty).render).to include("export type FlagKey = never;")
     end
   end
 

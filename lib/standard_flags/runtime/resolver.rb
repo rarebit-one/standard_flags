@@ -46,7 +46,7 @@ module StandardFlags
         rule = snapshot.rule(request.definition.key)
         return unless rule
 
-        Runtime.tracker.track(rule.key)
+        Runtime.tracker.track(rule.key) unless EvaluationTracker.untracked?
         Decision.new(request, rule, snapshot).call
       rescue Invalid => e
         invalid(request.definition, e)

@@ -71,6 +71,9 @@ module StandardFlags
     # new revision.
     class Command
       ACTOR = Actor.system("rake")
+      # How an AT= ends: Z or an offset. A bare local time would be read in
+      # the server's zone, which may not be the operator's, so it is refused.
+      ZONED = /(?:Z|[+-]\d\d:?\d\d)\z/i
       Outcome = Data.define(:ok, :message) do
         alias_method :ok?, :ok
       end
@@ -84,6 +87,7 @@ module StandardFlags
         reason = fetch("REASON")
         return refuse(task, "REASON= is required (it is written to the audit log)") unless reason
         return purge(reason) if task == :purge
+        return restore(reason) if task == :restore
 
         key = fetch("KEY")
         return refuse(task, "KEY= is required") unless key
@@ -120,6 +124,32 @@ module StandardFlags
         refuse(:purge, "could not purge (#{(e.cause_class if e.is_a?(Runtime::StoreError)) || e.class})")
       end
 
+      # Prints the plan (a dry run unless APPLY=1), member changes as counts.
+      def restore(reason)
+        at = iso8601(required("AT"))
+        return refuse(:restore, "AT= must be an ISO 8601 time with a zone (Z or an offset), e.g. 2026-11-20T09:00:00Z") unless at
+
+        keys = fetch("KEYS")&.split(",")&.map(&:strip)
+        result = Operations::Restore.call(at: at, reason: reason, keys: keys, apply: @env["APPLY"] == "1", registry: @registry)
+        return refuse_result("flags:restore", result) if result.value.nil?
+
+        Outcome.new(ok: result.success?, message: restore_lines(result).join("\n"))
+      end
+
+      def restore_lines(result)
+        value = result.value
+        lines = [ "flags:restore to #{value[:at]} (#{value[:applied] ? 'applied' : 'dry run; APPLY=1 applies it'})" ]
+        value[:entries].each do |entry|
+          changes = entry[:changes].empty? ? "" : ": #{entry[:changes].join('; ')}"
+          lines << "  #{entry[:target]}: #{entry[:status]}#{changes}"
+          lines << "    error: #{entry[:error]}" if entry[:error]
+          entry[:notes].each { |note| lines << "    note: #{note}" }
+        end
+        lines << "  nothing to restore" if value[:entries].empty?
+        lines << "flags:restore: #{result.errors.size} failed (#{result.code})" unless result.success?
+        lines
+      end
+
       def report(task, key, result)
         name = "flags:#{task.to_s.tr('_', ':')} #{key}"
         return refuse_result(name, result) unless result.success?
@@ -140,6 +170,13 @@ module StandardFlags
 
       def keys
         required("KEYS").split(",").map(&:strip)
+      end
+
+      # nil unless it names its zone (ZONED).
+      def iso8601(text)
+        Time.iso8601(text) if text.strip.match?(ZONED)
+      rescue ArgumentError
+        nil
       end
 
       def fetch(name)

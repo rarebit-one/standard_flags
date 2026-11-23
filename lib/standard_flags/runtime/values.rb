@@ -147,7 +147,13 @@ module StandardFlags
 
     # One live membership of a unit in a rule or a cohort. Stores never
     # return removed memberships; expired ones are dropped at read time.
-    Membership = Data.define(:rule_id, :cohort_id, :unit, :unit_key, :value, :expires_at) do
+    # `created_at` is set by the operator reads (Store#members,
+    # Store#members_at) and may be nil on the read path.
+    Membership = Data.define(:rule_id, :cohort_id, :unit, :unit_key, :value, :expires_at, :created_at) do
+      def initialize(created_at: nil, **attributes)
+        super
+      end
+
       def live?(now)
         expires_at.nil? || expires_at > now
       end
@@ -167,5 +173,9 @@ module StandardFlags
 
     # Everything a store returns from one load.
     Loaded = Data.define(:rules, :cohorts)
+
+    # One page of an owner's memberships (Store#members): `total` counts
+    # every membership not removed, expired ones included.
+    MemberPage = Data.define(:memberships, :total)
   end
 end

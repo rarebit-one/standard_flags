@@ -148,6 +148,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   health check warns.
 - **Conformance** fixtures for the write path
   (`spec/fixtures/conformance/operations/`).
+- **Operator tools (`StandardFlags::MCP`).** `list_flags`, `get_flag`,
+  `start_flag`, `pause_flag`, `stop_flag`, `ramp_flag`, `set_flag_value`,
+  `list_members`, `add_members`, `remove_members`, `list_cohorts` and
+  `get_cohort`: plain objects with `name`, `description`, `input_schema` and
+  `call(arguments, actor:)`, returning JSON-safe Hashes or
+  `{ "error" => { "code", "message" } }`, with no MCP framework dependency.
+  Reads need `flags:read`, filter cross-references (a cohort's attached
+  flags, a flag's cohorts) the same way, and never mark a rule as evaluated;
+  writes go through the operations and need a reason. `get_flag` names an
+  ENV pin's variable, never its value. Unit keys are masked (`•••4567`)
+  unless `list_members` is called with `reveal: true`, a reason and
+  `flags:write`; a reveal publishes and audits
+  `standard_flags.members.revealed` with counts only. `get_flag` with a
+  `unit_key` is a reveal too (`flags:write`, a reason,
+  `standard_flags.flag.probed`). Both fail closed under standard_audit's
+  `raise_on_audit_write_error`, including when its subscriber would swallow
+  the failure. One tool instance can serve concurrent calls from different
+  actors.
+- **Admin page generator.** `bin/rails g standard_flags:admin` writes a
+  controller (index, show, one action per operation; configurable base class,
+  path and signed-in-user method, answering 401 when nobody is signed in),
+  routes, and two Inertia pages in plain markup typed from the generated
+  TypeScript. Unit keys are posted as `unit_keys`, which Rails' default
+  parameter filter keeps out of logs. Pinned flags are read-only, labelled
+  "Pinned by environment (VAR)".
+- **TypeScript** output adds `FlagKey`, `FlagValues` and the shapes of the
+  MCP tools' results (`FlagList`, `FlagDetail`, `FlagMemberPage`,
+  `FlagAuditEntry`, ...).
+- **Restore.** `StandardFlags::Operations::Restore` and `flags:restore AT=
+  [KEYS=] [APPLY=1] REASON=` put rules (from standard_audit's audit log) and
+  memberships (from the memberships table) back as they were at a past time:
+  a dry run by default; applied as the system actor, each flag (settings,
+  cohorts, members) and each cohort's members in one write with one
+  revision bump and one `standard_flags.flag.restored` /
+  `standard_flags.cohort.restored` row, cohorts first, removals before
+  additions, expecting each rule's planned revision, with partial failure
+  reported per target. Skips flags with no audit history at T, pinned flags
+  and times older than `config.membership_retention`; `AT=` must name its
+  zone.
+- **Operator store reads.** `Store#members` (a page of an owner's
+  memberships) and `Store#members_at` (as of a time), on both stores;
+  `StandardFlags::AuditTrail` reads rule history and recent entries from
+  standard_audit's `audit_logs`; `Registry#with_unit_key`.
 - **`legacy_parser: :exact`** (with `legacy_true:`, default `%w[on]`) reads
   legacy `env:` names the way an exact `ENV["X"] == "on"` reader did: on/off
   kinds are on only for a `legacy_true:` value and pinned off by any other
@@ -165,6 +208,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A changed membership is versioned.** `AddMembers` on a live member with
+  a different value or expiry marks the old row removed and inserts a new
+  one (re-adding it unchanged writes nothing), so Restore can read the value
+  a member had at a past time. Purge deletes the old rows after the
+  retention as usual.
 - The manifest's `permanent` key is now on entries of kind `mode` as well as
   `flag`. Regenerate a committed manifest after upgrading.
 

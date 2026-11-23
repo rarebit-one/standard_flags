@@ -1,3 +1,5 @@
+require "securerandom"
+
 module StandardFlags
   module Operations
     # Records each change (R16). Inside the operation's transaction
@@ -49,6 +51,80 @@ module StandardFlags
         else
           false
         end
+      end
+
+      # Outside any write: an operator read worth a row of its own (a reveal
+      # of unit keys, or a probe of one). One row, by whichever path writes
+      # it, then the event for everyone else. By default a failed row is
+      # reported and the read goes ahead.
+      #
+      # With standard_audit's `raise_on_audit_write_error` set, it fails
+      # closed: it raises Failure(:audit_failed), so the caller can refuse
+      # the read, unless the row is known to be written (record_read!).
+      def record_read(event, payload)
+        return record_read!(event, payload) if raise_on_write_error?
+
+        if subscribed?(event)
+          begin
+            ActiveSupport::Notifications.instrument(event, payload)
+          rescue StandardError => e
+            Reporting.report(Error.new("the audit row for #{event} was not written (#{e.class})"), event: event)
+          end
+        else
+          write(event, payload) if direct?(event)
+          Reporting.publish(event, payload)
+        end
+      end
+
+      # The fail-closed read. The row is written inside a store write, in a
+      # savepoint, as the write path's is: a database failure that
+      # standard_audit's subscriber swallows still aborts the savepoint (on
+      # Postgres), and is raised here. The row also carries a one-off
+      # `audit_ref`, and when standard_audit's AuditLog is loaded it is read
+      # back inside the same write, which catches a failure swallowed before
+      # the database (and a row batched for later). `config.async` writes
+      # the row from a job, so it can never be confirmed: refused.
+      def record_read!(event, payload)
+        if ::StandardAudit.config.respond_to?(:async) && ::StandardAudit.config.async
+          raise Failure.new(:audit_failed, "standard_audit writes audit rows from a job (config.async), so this one can't be confirmed")
+        end
+
+        payload = payload.merge(audit_ref: SecureRandom.uuid)
+        subscribed = subscribed?(event)
+        in_savepoint do
+          if subscribed
+            ActiveSupport::Notifications.instrument(event, payload)
+          else
+            writer.new.write(event, actor: payload[:actor], metadata: payload.except(:actor))
+          end
+          confirm!(event, payload[:audit_ref])
+        end
+        Reporting.publish(event, payload) unless subscribed
+      rescue Failure
+        raise
+      rescue StandardError => e
+        raise if e.class.name == "StandardAudit::Operation::DeclarationError"
+
+        raise Failure.new(:audit_failed, "the audit row could not be written (#{(e.cause_class if e.is_a?(Runtime::StoreError)) || e.class})")
+      end
+
+      # With runtime rules off there is no store write to run in (only a
+      # probe of an ENV-pinned or default flag gets here); the read-back
+      # still applies.
+      def in_savepoint(&block)
+        return yield unless Runtime.enabled?
+
+        Runtime.store.write { |tx| tx.isolated(&block) }
+      end
+
+      # Reads the row back by its audit_ref, when standard_audit's AuditLog
+      # is there to read (a Postgres JSON read, as AuditTrail's).
+      def confirm!(event, ref)
+        log = defined?(::StandardAudit::AuditLog) ? ::StandardAudit::AuditLog : nil
+        return unless log.respond_to?(:where)
+        return if log.where(event_type: event).where("metadata->>'audit_ref' = ?", ref).exists?
+
+        raise Failure.new(:audit_failed, "the audit row could not be written (not found after the write)")
       end
 
       # After the commit. Never raises.

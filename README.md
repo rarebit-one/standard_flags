@@ -493,7 +493,7 @@ or for cohort operations the store's revision. `store_revision` is always
 | `SetVariants(weights:)` | `flags:ramp` | Weights over the flag's variants or mode values, summing to 10,000. `{}` clears them. |
 | `SetValue(value:)` | `flags:write` | The fallthrough value, served to every unit nothing else matched. Moves a mode off → sensor → on and throws a kill switch. `nil` clears it. |
 | `SetConditions(platforms:, versions:, segments:)` | `flags:write` | Replaces the conditions; omitted ones are cleared. |
-| `AddMembers(keys:, value:, unit:, expires_at:)` | `flags:write` | Adds units (records or keys) to a rule or a cohort; adding an existing member updates its value and expiry. |
+| `AddMembers(keys:, value:, unit:, expires_at:)` | `flags:write` | Adds units (records or keys) to a rule or a cohort. Adding an existing member with a new value or expiry keeps the old row as removed and adds a new one, so [Restore](#restore) can read it back; adding it unchanged writes nothing. |
 | `RemoveMembers(keys:, unit:)` | `flags:write` | Removes them (soft delete, see retention below). |
 | `CreateCohort(unit:, name:, description:)` / `ArchiveCohort` | `flags:write` | Named member lists of one unit. Archiving needs the cohort detached everywhere. |
 | `AttachCohort(cohort:, value:)` / `DetachCohort(cohort:)` | `flags:write` | Attach a cohort to a flag, serving `value:` to its members. |
@@ -583,6 +583,9 @@ state before and after, without members, and publishes one event:
 | `standard_flags.flag.members_added` / `.members_removed` | AddMembers, RemoveMembers on a rule |
 | `standard_flags.cohort.created` / `.archived` / `.attached` / `.detached` | the cohort operations |
 | `standard_flags.cohort.members_added` / `.members_removed` | AddMembers, RemoveMembers on a cohort |
+| `standard_flags.flag.restored` / `standard_flags.cohort.restored` | [Restore](#restore): one row per flag or cohort put back, member changes as counts |
+| `standard_flags.members.revealed` | Not a change: an operator revealed members' unit keys ([Operator tools](#operator-tools-mcp)). Counts only. |
+| `standard_flags.flag.probed` | Not a change: an operator evaluated a flag for one unit key, which says whether it is a member ([Operator tools](#operator-tools-mcp)). Counts only. |
 
 The payload has `actor` (the record, or nil for a system actor),
 `actor_label`, `reason`, `key` or `cohort`, `revision` and `store_revision`
@@ -641,6 +644,7 @@ bin/rails flags:stop KEY=new_checkout SERVE=on REASON="winner"
 bin/rails flags:members:add KEY=new_checkout KEYS=42,43 VALUE=on [EXPIRES_AT=2026-12-01T00:00:00Z] REASON="pilot"
 bin/rails flags:members:remove KEY=cohort:staff KEYS=42 REASON="left"
 bin/rails flags:purge REASON="weekly"
+bin/rails flags:restore AT=2026-11-20T09:00:00Z [KEYS=new_checkout,cohort:staff] [APPLY=1] REASON="bad ramp"
 ```
 
 The default `config.authorize` allows system actors; if you replace it, keep
@@ -648,8 +652,9 @@ allowing them or the rake tasks are refused too.
 
 ### Retention
 
-`RemoveMembers` keeps the row with `removed_at`, so a change can be undone
-from the audit trail. `bin/rails flags:purge` (or `StandardFlags::PurgeJob`,
+`RemoveMembers` keeps the row with `removed_at` (and a changed membership
+keeps its old row the same way), so [Restore](#restore) can put members
+back. `bin/rails flags:purge` (or `StandardFlags::PurgeJob`,
 an ActiveJob, defined when the app loads ActiveJob) hard-deletes memberships
 removed or expired more than `config.membership_retention` ago (default 90
 days). Schedule the job, for example daily.
@@ -669,7 +674,163 @@ UPDATE SKIP LOCKED`), it is skipped inside an open transaction, and it
 changes neither `lock_version` nor `updated_at`. A process that evaluates
 flags outside the executor never writes them. A failed write is reported
 once and retried, and `config.track_evaluations = false` turns it off (and
-the 14-day check with it).
+the 14-day check with it). Operator reads (the MCP tools and the admin page)
+evaluate flags without noting them, so looking at a dead flag doesn't hide
+it.
+
+### Restore
+
+`StandardFlags::Operations::Restore` (and `bin/rails flags:restore`) puts
+rules and memberships back as they were at a past time T:
+
+```ruby
+restore = StandardFlags::Operations::Restore
+restore.call(at: Time.utc(2026, 11, 20, 9), reason: "bad ramp")                       # dry run
+restore.call(at: Time.utc(2026, 11, 20, 9), keys: %w[new_checkout cohort:staff], apply: true, reason: "bad ramp")
+```
+
+- **A rule's state at T** is the after-state of its latest audit row at or
+  before T, read back through standard_audit's query API
+  (`StandardAudit::AuditLog`, the `audit_logs` table). Without standard_audit
+  it fails with `:audit_unavailable`. Only an audited state drives a change:
+  a flag with no row at or before T is skipped ("no audit history at T; left
+  unchanged"), never read as "no rule then". Rows go missing for ordinary
+  reasons (the audit log's retention, auditing set up after the rule, a
+  write standard_audit swallowed), and a long-thrown kill switch is exactly
+  the rule nobody touches.
+- **Members at T** come from the memberships table: rows created by T and
+  not removed or expired then. Removed and changed rows are kept for
+  `config.membership_retention`, so a T older than that is refused
+  (`:retention_exceeded`). Members whose expiry has passed since T are not
+  restored (the note says how many).
+- **Dry run by default.** The Result lists each flag (and each cohort, for
+  its members) as `unchanged`, `planned` or `skipped`, with the changes as
+  text, member changes as counts.
+- **`apply: true`** (`APPLY=1`) writes each flag's state at T (its
+  settings, attached cohorts in their old order, and direct members) and
+  each cohort's members as one store write: one revision bump, one
+  `standard_flags.flag.restored` or `standard_flags.cohort.restored` row
+  (the full state before and after, member changes as counts), as
+  `StandardFlags::Actor.system("restore")` with the reason
+  `"restore to <T>: <reason>"`. Evaluators see the state before or the state
+  after, never a mix of the two, and a write that fails changes nothing.
+  Inside it, members are removed before any are added, so
+  `config.max_members` counts the end state. Cohorts go first, so a flag
+  that attaches one serves its members as they were. Stored unit keys are
+  put back as they are, not passed through the unit's `key:` again. A
+  flag's write expects the revision it was planned at, so a change made
+  meanwhile stops that flag (`:stale_revision`) rather than being
+  overwritten. Targets are independent: when some fail the Result is a
+  failure (`:partial_failure`) whose `value` still lists what was applied,
+  what failed and why.
+- **Skipped**, with a note: ENV-pinned flags, undeclared or tombstoned
+  keys, flags with no audit history at T, and what the operations don't do
+  (un-stop a rule, clear a percentage, change a rule's salt).
+- **`AT=`** must name its zone (`2026-11-20T09:00:00Z` or `+08:00`); a bare
+  local time is refused rather than read in the server's zone.
+
+Restore authorises as the system actor, so it is a console and rake tool,
+not an MCP tool or an admin button.
+
+## Operator tools (MCP)
+
+`StandardFlags::MCP` has one class per tool for an agent or chat surface,
+with no dependency on any MCP framework. Each instance has `name`,
+`description`, `input_schema` (a JSON Schema Hash) and
+`call(arguments, actor:)`, which returns a JSON-safe Hash with String keys,
+or `{ "error" => { "code" =>, "message" => } }`. Adapting them to a tool
+registry takes a few lines:
+
+```ruby
+StandardFlags::MCP.tools.each do |tool|
+  server.register_tool(name: tool.name, description: tool.description, input_schema: tool.input_schema) do |arguments, context|
+    tool.call(arguments, actor: context.user)
+  end
+end
+```
+
+| Tool | Scope | Does |
+|------|-------|------|
+| `list_flags` | `flags:read` (per flag) | Every flag the actor may read: kind, owner, values, value with no unit, source, ENV pin, rule summary. |
+| `get_flag` | `flags:read`; with `unit_key`, `flags:write` and `reason` | One flag: value, reason, `rule_id` and source (`env_pin`, `runtime_rule`, `guard`, `code_default`, `error`, `test_override`), the ENV pin and the stored rule in full. With `unit_key` (normalised through the unit's `key:`, masked in the answer) it evaluates for that unit, which is a reveal (below). |
+| `start_flag`, `pause_flag`, `stop_flag`, `ramp_flag`, `set_flag_value` | as the operation | Run Start, Pause, Stop, Ramp and SetValue. |
+| `list_members` | `flags:read` | One page (`offset`, `limit` up to 200) of a flag's (`key`) or a cohort's (`cohort`) members. |
+| `add_members`, `remove_members` | `flags:write` | Run AddMembers and RemoveMembers on a flag or a cohort. |
+| `list_cohorts`, `get_cohort` | `flags:read` (per cohort) | Cohorts with their unit, member count, archived state and the flags they're attached to. |
+
+- **Reads** ask `config.authorize` for `"flags:read"`; `list_flags` and
+  `list_cohorts` list only what the actor may read, and so do the
+  cross-references: a cohort's `attached_to` names only flags the actor may
+  read (`hidden_flags` counts the rest), and a flag's `rule.cohorts` only
+  cohorts it may read (`cohort:<key>`; `hidden_cohorts` counts the rest).
+  Reads never mark a rule as evaluated. **Writes** go through
+  the operations, need `reason` and accept `expected_revision` (the rule's
+  `revision` from `get_flag`). A failed operation's code is the error code:
+  `pinned_by_env`, `stale_revision`, `unauthorized`, `invalid` and so on.
+- **Pins** show as `{ "env_var" => "STANDARD_FLAGS_X", "label" => "Pinned by environment (STANDARD_FLAGS_X)" }`,
+  never the variable's value.
+- **Unit keys are masked** (`•••4567`: the last four characters, fewer for
+  short keys so at least half stays hidden). `list_members` shows them in
+  full only with `reveal: true` and a `reason`, for an actor allowed
+  `"flags:write"` on the target. A reveal publishes (and with standard_audit,
+  records) `standard_flags.members.revealed` with the actor, reason, flag or
+  cohort and counts, never the keys. `get_flag` with `unit_key` says
+  whether that unit is a member (and the mask gives away its last four), so
+  it is a reveal too: `"flags:write"` on the flag, a `reason`, and a
+  `standard_flags.flag.probed` row with counts and no key.
+- **Reveals fail closed** when standard_audit's
+  `raise_on_audit_write_error` is set: keys (or a probe's answer) come back
+  only once the row is known to be written. The row is written in a store
+  transaction savepoint, so a failure standard_audit's subscriber swallows
+  still aborts it, and is read back by a one-off `audit_ref`. With
+  standard_audit's `config.async` the row can't be confirmed, so the read is
+  refused. Without `raise_on_audit_write_error`, a lost row is reported and
+  the read goes ahead, as for writes.
+- **One instance per tool is safe to share** across threads and actors (as
+  an MCP server registers them): it is frozen, and each call runs on its
+  own copy holding that call's actor, arguments and store read.
+- A missing `actor:` falls back to `config.actor_resolver`. The generated
+  admin page never relies on that (below).
+
+## Admin page
+
+```bash
+bin/rails g standard_flags:admin [--path=/admin/flags] [--base-controller=ApplicationController] \
+  [--controller=Admin::FlagsController] [--pages-path=app/javascript/pages] [--actor-method=current_user]
+bin/rails standard_flags:typescript
+```
+
+It writes code your app owns and restyles:
+
+- **A controller** inheriting from `--base-controller` (where your admin
+  authentication lives), with `index`, `show` and one action per operation
+  (`start`, `pause`, `stop`, `ramp`, `set_value`, `add_members`,
+  `remove_members`). Every request runs as the signed-in user, from
+  `--actor-method` (default `current_user`); when that is nil it answers 401
+  (`standard_flags_deny`, yours to change to a redirect) before any tool
+  runs, and never falls back to `config.actor_resolver`, which may return a
+  system actor for jobs. Pages read through the MCP tools, so
+  `config.authorize` decides who sees what and members stay masked. Each
+  action calls its operation with the form's reason and the revision the
+  page showed, then redirects back with a flash.
+- **Unit keys are posted as `unit_keys`**, which Rails' default
+  `config.filter_parameters` (`_key`) keeps out of the request log and error
+  trackers. If your app's list doesn't match it, add `:unit_keys`. An MCP
+  host should likewise not log `get_flag`'s `unit_key` or the member tools'
+  `keys` arguments.
+- **Routes** under `--path`: `GET /`, `GET /:id`, `POST /:id/<operation>`,
+  named `standard_flags_flags`, `standard_flags_flag` and
+  `standard_flags_<operation>_flag`.
+- **Two Inertia pages**, `standard_flags/index.tsx` and `show.tsx`, in plain
+  semantic markup with no styling framework, typed from the
+  `standard_flags:typescript` output (`FlagList`, `FlagDetail`,
+  `FlagMemberPage`, `FlagAuditEntry`). The show page has the rule, the
+  members (masked, paged), recent audit entries when standard_audit is
+  loaded, and a form per operation. A pinned flag is read-only, labelled
+  "Pinned by environment (VAR)".
+
+The gem never reads these files back: move the routes, cut operations, or
+restyle the pages freely.
 
 ## Environment variables
 
@@ -889,9 +1050,10 @@ end
 | `bin/rails flags:stale` | Flags and modes past `remove_by`, with the `final:` value to keep. Permanent ones never appear. With runtime rules on, also stale rules and memberships due for purge ([Stale rules](#stale-rules)). |
 | `bin/rails flags:show KEY=` | One flag's declaration, value here, ENV pin and stored rule; `KEY=cohort:<key>` for a cohort. |
 | `bin/rails flags:set` / `ramp` / `start` / `pause` / `stop` / `members:add` / `members:remove` / `purge` | Break-glass changes through the audited operations ([Rake tasks for break-glass changes](#rake-tasks-for-break-glass-changes)). |
+| `bin/rails flags:restore AT=` | Rules and memberships as they were at `AT`, from the audit log; a dry run unless `APPLY=1` ([Restore](#restore)). |
 | `bin/rails flags:refs` | Scans `config.refs_paths` (default `app lib config`) for `on?(:k`, `off?(:k`, `mode(:k`, `variant(:k`, `evaluate(:k`, `requires_flag :k` and string keys. Exits non-zero for undeclared or tombstoned keys; warns for declared flags nothing reads. Run it in CI. |
 | `bin/rails standard_flags:manifest` | Writes `config/flags.manifest.json`: keys, wire names, kinds, values, audiences and defaults (and `permanent` on entries of kind `flag` and `mode`), deterministically. Commit it. |
-| `bin/rails standard_flags:typescript` | Writes a `.d.ts` with a `Features` interface per audience (`WebFeatures`, `MobileFeatures`, …) keyed by wire name. |
+| `bin/rails standard_flags:typescript` | Writes a `.d.ts` with a `Features` interface per audience (`WebFeatures`, `MobileFeatures`, …) keyed by wire name, `FlagKey` and `FlagValues` (every key and its stored values), and the shapes of the MCP tools' results that the [admin page](#admin-page) uses. |
 
 ## Observability
 
@@ -909,6 +1071,8 @@ end
 | `rule_invalid.standard_flags` | A stored rule holds something its flag can't serve. |
 | `targeting_key_missing.standard_flags` | A rule needs a unit key the context doesn't have. |
 | `change.standard_flags` | An operation's change committed (event, key or cohort, actor label, revision, store revision). The full events are `standard_flags.flag.*` and `standard_flags.cohort.*` ([Audit](#audit)). |
+| `standard_flags.members.revealed` | An operator revealed members' unit keys (actor, reason, target, counts). |
+| `standard_flags.flag.probed` | An operator evaluated a flag for one unit key (actor, reason, flag, unit, counts). |
 | `purge.standard_flags` | Memberships purged (counts). |
 | `evaluation_tracking_failed.standard_flags` | Writing `last_evaluated_at` failed; it is retried. |
 | `report_registry_full.standard_flags` | The once-per-process report registry reached its cap (1,000 entries); new warnings are no longer reported in this process. |
@@ -1176,8 +1340,8 @@ every vector.
 Phase 2 adds runtime rules stored in the database (changes without a
 redeploy, allow and deny lists, cohorts, sticky percentage rollouts with
 per-flag salts), audited write operations and an admin generator. The read
-path, the operations and the rake tasks are done; MCP tools, the admin
-generator, `flags:restore` and an OpenFeature provider come next. Phase 3
+path, the operations, the rake tasks, the MCP tools, the admin generator
+and `flags:restore` are done; an OpenFeature provider comes next. Phase 3
 adds client delivery: an OpenFeature remote-evaluation (OFREP) endpoint,
 client version targeting, a minimum-version endpoint and the manifest
 contract checked in client CI. Phase 4 adds experiment exposure tracking and

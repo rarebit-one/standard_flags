@@ -100,14 +100,14 @@ module StandardFlags
       end
 
       # Adds (or replaces) one membership on a rule or a cohort.
-      def add_member(unit:, unit_key:, value:, rule: nil, cohort: nil, expires_at: nil)
+      def add_member(unit:, unit_key:, value:, rule: nil, cohort: nil, expires_at: nil, created_at: Time.now)
         mutate do
           rule_id, cohort_id = owner_ids(rule, cohort)
           unit = unit.to_sym
           unit_key = unit_key.to_s
           @memberships.reject! { |m| m.rule_id == rule_id && m.cohort_id == cohort_id && m.unit == unit && m.unit_key == unit_key }
           @memberships << Membership.new(rule_id: rule_id, cohort_id: cohort_id, unit: unit, unit_key: unit_key,
-                                         value: Runtime.wire(value), expires_at: expires_at)
+                                         value: Runtime.wire(value), expires_at: expires_at, created_at: created_at)
           recount(rule_id, cohort_id)
         end
       end
@@ -168,6 +168,30 @@ module StandardFlags
 
             @rules[key] = rule.with(last_evaluated_at: now)
           end
+        end
+      end
+
+      def members(rule: nil, cohort: nil, offset: 0, limit: nil)
+        @mutex.synchronize do
+          ids = owner_ids_or_nil(rule, cohort)
+          next MemberPage.new(memberships: [], total: 0) unless ids
+
+          live = @memberships.select { |m| [ m.rule_id, m.cohort_id ] == ids }
+          page = limit ? live.drop(offset).first(limit) : live.drop(offset)
+          MemberPage.new(memberships: page, total: live.size)
+        end
+      end
+
+      def members_at(at, rule: nil, cohort: nil)
+        @mutex.synchronize do
+          ids = owner_ids_or_nil(rule, cohort)
+          next [] unless ids
+
+          live = @memberships.select { |m| [ m.rule_id, m.cohort_id ] == ids && existed_at?(m, at) }
+          gone = @removed.select do |entry|
+            [ entry.membership.rule_id, entry.membership.cohort_id ] == ids && entry.removed_at > at && existed_at?(entry.membership, at)
+          end
+          live + gone.map(&:membership)
         end
       end
 
@@ -262,12 +286,19 @@ module StandardFlags
         rule_id, cohort_id = owner_of(owner)
         unit = unit.to_sym
         counts = { added: 0, updated: 0 }
+        now = Time.now
         unit_keys.each do |unit_key|
           existing = @memberships.index { |m| m.rule_id == rule_id && m.cohort_id == cohort_id && m.unit == unit && m.unit_key == unit_key }
           counts[existing ? :updated : :added] += 1
-          @memberships.delete_at(existing) if existing
+          if existing
+            current = @memberships[existing]
+            next if current.value == value && current.expires_at == expires_at
+
+            # Versioned, as in the database: the old one is kept as removed.
+            @removed << Removed.new(membership: @memberships.delete_at(existing), removed_at: now)
+          end
           @memberships << Membership.new(rule_id: rule_id, cohort_id: cohort_id, unit: unit, unit_key: unit_key,
-                                         value: value, expires_at: expires_at)
+                                         value: value, expires_at: expires_at, created_at: now)
         end
         recount(rule_id, cohort_id)
         counts
@@ -333,6 +364,18 @@ module StandardFlags
       def normalize_attachments(value)
         pairs = value.is_a?(Hash) ? value.to_a : Array(value).map { |a| a.to_h.transform_keys(&:to_s).values_at("cohort", "value") }
         pairs.map { |cohort, served| { "cohort" => cohort.to_s, "value" => Runtime.wire(served) } }
+      end
+
+      # Like owner_ids, but nil for an owner that doesn't exist.
+      def owner_ids_or_nil(rule, cohort)
+        raise ArgumentError, "pass exactly one of rule: or cohort:" unless rule.nil? ^ cohort.nil?
+
+        rule ? (id = @rules[rule.to_sym]&.id) && [ id, nil ] : (id = @cohorts[cohort.to_s]&.id) && [ nil, id ]
+      end
+
+      # Created by `at`, and not expired by then.
+      def existed_at?(membership, at)
+        (membership.created_at.nil? || membership.created_at <= at) && (membership.expires_at.nil? || membership.expires_at > at)
       end
 
       def owner_ids(rule, cohort)
