@@ -8,21 +8,30 @@ module StandardFlags
   # @api private
   module Reporting
     SOURCE = "standard_flags".freeze
+    # Most tokens `once` remembers. Unknown keys can come from outside the
+    # code, so past this it stops recording (and reporting) new tokens and
+    # emits one `report_registry_full` notification, instead of growing.
+    LIMIT = 1_000
 
     @mutex = Mutex.new
     @seen = Set.new
+    @full = false
 
     class << self
       # Runs the block the first time `token` is seen in this process, so a
       # bad pin read on every request reports once rather than per request.
       def once(*token)
-        first = @mutex.synchronize { @seen.add?(token) }
+        first, newly_full = @mutex.synchronize { record(token) }
+        instrument(:report_registry_full, limit: LIMIT) if newly_full
         yield if first
-        !first.nil?
+        first
       end
 
       def reset!
-        @mutex.synchronize { @seen.clear }
+        @mutex.synchronize do
+          @seen.clear
+          @full = false
+        end
       end
 
       # Reports a handled warning through `config.error_reporter` when one is
@@ -52,6 +61,20 @@ module StandardFlags
       end
 
       private
+
+      # [first time seen, registry just filled]. Called under the mutex.
+      def record(token)
+        return [ false, false ] if @seen.include?(token)
+
+        if @seen.size < LIMIT
+          @seen.add(token)
+          return [ true, false ]
+        end
+
+        newly_full = !@full
+        @full = true
+        [ false, newly_full ]
+      end
 
       # true when a custom reporter took the report.
       def custom_report(exception, context)

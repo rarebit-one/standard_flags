@@ -27,13 +27,19 @@ module StandardFlags
       end
     end
 
+    # Forbidden when the context's environment or the process's own
+    # (`registry.current_env`) is, so a caller-supplied env can't relax it.
     class Guard
       def call(request)
         definition = request.definition
-        return unless definition.forbidden_in?(request.env_name)
+        return if definition.forbidden_in.empty?
+
+        env_name = request.env_name
+        env_name = request.registry.current_env unless definition.forbidden_in?(env_name)
+        return unless definition.forbidden_in?(env_name)
 
         pin = ::StandardFlags::EnvPin.scan(definition, request.env).pin
-        report(definition, request.env_name, pin) if pin && pin.value != definition.off_value
+        report(definition, env_name, pin) if pin && pin.value != definition.off_value
         Evaluation.build(definition, definition.off_value, reason: Reason::DISABLED)
       end
 

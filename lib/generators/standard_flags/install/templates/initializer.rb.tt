@@ -31,6 +31,7 @@
 #   # config.refresh_interval = 5
 #   # Answers segment conditions: ->(segment_name, context) { true/false }.
 #   # config.segment_resolver = ->(name, context) { context.account&.in_segment?(name) }
+#   # (Through the OpenFeature provider, actors are keys (strings), not records.)
 #
 #   # Whose wire name requires_flag reports in meta.feature.
 #   # config.default_audience = :web

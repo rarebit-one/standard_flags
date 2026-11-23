@@ -82,10 +82,21 @@ RSpec.describe "resolution" do
       expect(events).to be_empty
     end
 
-    it "uses the context environment over the resolver" do
+    it "can't be relaxed by a context environment: the process environment still forbids" do
       set_env("STANDARD_FLAGS_DEMO_DATA" => "on")
       staging = StandardFlags::Context.new(env: "staging")
-      expect(StandardFlags.on?(:demo_data, for: staging)).to be(true)
+      expect(StandardFlags.evaluate(:demo_data, for: staging)).to have_attributes(value: false, reason: "DISABLED")
+    end
+
+    it "is applied by a context environment that is forbidden" do
+      define_flags do
+        env_resolver -> { "staging" }
+        flag :demo_data, owner: "platform", remove_by: "2027-01-01", final: false, forbidden_in: :production
+      end
+      set_env("STANDARD_FLAGS_DEMO_DATA" => "on")
+      expect(StandardFlags.on?(:demo_data)).to be(true)
+      expect(StandardFlags.evaluate(:demo_data, for: StandardFlags::Context.new(env: "production")))
+        .to have_attributes(value: false, reason: "DISABLED")
     end
   end
 
