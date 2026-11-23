@@ -8,26 +8,36 @@ module StandardFlags
   # tested without booting an app.
   module Tooling
     # `flags:list`: every flag, its value here, and where the value came from.
-    # A permanent flag shows `permanent` in the remove_by column.
+    # A permanent flag shows `permanent` in the remove_by column. With
+    # runtime rules on, a `rule` column shows each flag's rule status, and a
+    # header line the snapshot's revision and age.
     class List
       HEADERS = %w[key kind value reason env_var remove_by].freeze
+      RUNTIME_HEADERS = (HEADERS + %w[rule]).freeze
 
       def initialize(registry: StandardFlags.registry)
         @registry = registry
       end
 
+      def headers
+        Runtime.enabled? ? RUNTIME_HEADERS : HEADERS
+      end
+
       def rows
+        runtime = Runtime.enabled?
         @registry.definitions.sort_by(&:key).map do |definition|
           evaluation = Evaluator.evaluate(@registry, definition.key, Context.empty)
-          [ definition.key.to_s, definition.kind.to_s, evaluation.value.to_s, evaluation.reason,
-            evaluation.source_env_var || "-", lifecycle(definition) ]
+          row = [ definition.key.to_s, definition.kind.to_s, evaluation.value.to_s, evaluation.reason,
+                  evaluation.source_env_var || "-", lifecycle(definition) ]
+          runtime ? row << (Runtime.snapshot.rule(definition.key)&.status || "-") : row
         end
       end
 
       def render
-        table = [ HEADERS ] + rows
-        widths = HEADERS.each_index.map { |i| table.map { |row| row[i].length }.max }
-        table.map { |row| row.each_with_index.map { |cell, i| cell.ljust(widths[i]) }.join("  ").rstrip }.join("\n")
+        table = [ headers ] + rows
+        widths = headers.each_index.map { |i| table.map { |row| row[i].length }.max }
+        lines = table.map { |row| row.each_with_index.map { |cell, i| cell.ljust(widths[i]) }.join("  ").rstrip }
+        ([ runtime_line ].compact + lines).join("\n")
       end
 
       private
@@ -36,6 +46,17 @@ module StandardFlags
         return "permanent" if definition.permanent?
 
         definition.remove_by&.iso8601 || "-"
+      end
+
+      def runtime_line
+        return unless Runtime.enabled?
+
+        snapshot = Runtime.snapshot
+        return "runtime rules: not loaded (serving code defaults)" unless snapshot.loaded
+
+        orphans = snapshot.rules.keys.reject { |key| @registry.key?(key) }
+        line = "runtime rules: revision #{snapshot.revision}, #{snapshot.age}s old#{', stale' if snapshot.stale}"
+        orphans.empty? ? line : "#{line}; rules for undeclared keys: #{orphans.sort.join(', ')}"
       end
     end
 

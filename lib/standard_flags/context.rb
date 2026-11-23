@@ -63,10 +63,14 @@ module StandardFlags
 
     private
 
+    # An unsaved record (nil id) falls back to object identity, so two of
+    # them never share a memoised answer.
     def identity(object)
       case object
       when nil, String, Symbol, Numeric, true, false then object
-      else [ object.class.name, object.respond_to?(:id) ? object.id : object.object_id ]
+      else
+        id = object.id if object.respond_to?(:id)
+        [ object.class.name, id.nil? ? object.object_id : id ]
       end
     end
   end

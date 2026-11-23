@@ -9,12 +9,15 @@ the [OpenFeature](https://openfeature.dev) shape (value, variant, reason,
 error code), so "why is this on?" is always a one-line answer.
 
 This is version 0.1.0 (Phase 1): registry, ENV layer and evaluation API. It
-needs no database tables. See [Roadmap](#roadmap).
+needs no database tables. Unreleased on `main`: opt-in
+[runtime rules](#runtime-rules) stored in the app's own database (the read
+path; the audited write operations come next). See [Roadmap](#roadmap).
 
 - [Install](#install)
 - [Declaring flags](#declaring-flags)
 - [Reading flags](#reading-flags)
 - [How a value is decided](#how-a-value-is-decided)
+- [Runtime rules](#runtime-rules)
 - [Environment variables](#environment-variables)
 - [Sensor rollouts](#sensor-rollouts)
 - [Controller and job guards](#controller-and-job-guards)
@@ -56,6 +59,7 @@ StandardFlags.define do
   env_resolver -> { ENV.fetch("APP_ENVIRONMENT", Rails.env) }
 
   unit :account, from: ->(ctx) { ctx.account }
+  unit :phone, from: ->(ctx) { ctx.phone }, key: ->(phone) { phone.to_s.delete("^0-9+") }
 
   flag :new_checkout,
        owner: "payments",
@@ -95,7 +99,7 @@ end
 | `flag` | on / off | off | Temporary release flags: `remove_by:` and `final:` are required. With `permanent: true`, a standing switch instead (see below). |
 | `kill_switch` | on / off | on, fails open | Permanent switches that turn a feature off in an emergency. |
 | `mode` | declared values | first value | Staged rollouts. Presets: `:sensor` (off/sensor/on), `:cutover` (off/allowlist/all), `:shadow` (off/shadow/enforce); or `values:`. |
-| `experiment` | declared variants | first variant | Experiments. In 0.1.0 an experiment always resolves to its first variant (list `control` first) unless pinned by ENV. |
+| `experiment` | declared variants | first variant | Experiments. Resolves to its first variant (list `control` first) unless pinned by ENV or split by a runtime rule's variant weights. |
 | `compat` | on / off | on | Compatibility shims that stay on until they are removed. |
 | `tombstone` | — | — | A removed key. It can never be declared again. |
 
@@ -111,14 +115,26 @@ end
 | `forbidden_in:` | Environment name(s) where the flag is forced off. A pin that tries to turn it on is reported once per process. |
 | `fail:` | The value returned if evaluation raises. Kill switches default to on. |
 | `expose:` | `{ audience => wire_name }`, or a list of audiences to use the key. Default: not exposed. |
-| `unit:` | The unit the flag targets. Carried in the context now; used by targeting later. |
+| `unit:` | The unit the flag targets. [Runtime rules](#runtime-rules) match members, cohorts and percentages on this unit's key. |
+| `bucketing:` | On `flag`, `mode` and `experiment`: `{ version: 1 \| 2, salt: "..." }`, for a flag migrated from another system that must keep its old buckets. Needs `unit:`. |
 | `remove_by:`, `final:` | On `flag`: the date it should be gone, and the value it settles on. |
 | `permanent:` | On `flag`: `true` for a standing switch with no `remove_by:`/`final:`. |
 
 The registry is validated when it loads. `StandardFlags::DefinitionError` is
 raised for a reused tombstoned key, a missing owner, a `flag` without
 `remove_by:`/`final:` (or a `permanent: true` flag with either), a default outside a mode's values, the same wire name
-used twice for one audience, an undeclared unit, or any unknown attribute.
+used twice for one audience, an undeclared unit, a malformed `bucketing:` or
+unit `key:`, or any unknown attribute.
+
+### Units
+
+`unit :name, from: ->(ctx) { ... }` (or `resolver:`, any object with
+`call(context)`) finds the unit's actor in a context. Runtime rules match a
+unit by its **key**: `record.id.to_s` for anything with an `id`, otherwise
+the value itself as a string; blank means missing. `key: ->(actor) { ... }`
+normalises it in one place, such as a phone number to E.164. Pass actors by
+unit name (`for: { account: account }`), or a target that answers the unit
+name (`for: user` when `user.account` exists).
 
 ### Permanent flags
 
@@ -209,7 +225,10 @@ also carry an environment override and client attributes
 Evaluations are memoised per unit of work through the Rails executor, not
 Rack middleware, so requests, jobs, mailers and console reloads all get a
 consistent answer within one unit and a fresh read of ENV in the next.
-Outside an executor run nothing is memoised.
+Outside an executor run nothing is memoised. With runtime rules on, the
+flag's resolved unit key is part of the memo key, so unsaved records (a nil
+`id`) and units whose `key:` reads something other than `id` never share an
+answer.
 
 ## How a value is decided
 
@@ -220,16 +239,199 @@ answers. Gates are never OR'd together.
 2. **Guard.** `forbidden_in:` forces the off value. Reason `DISABLED`.
 3. **ENV pin.** `STANDARD_FLAGS_<KEY>`, then legacy `env:` names. Reason
    `ENV_PIN`, or `KILL_SWITCH` when a kill switch is pinned off.
-4. **Code default** for the current environment. Reason `DEFAULT`.
+4. **Runtime rule**, when [runtime rules](#runtime-rules) are on and the
+   flag's rule answers. Reasons `TARGETING_MATCH`, `SPLIT`, `STATIC` or
+   `KILL_SWITCH`, with a `rule_id`.
+5. **Code default** for the current environment. Reason `DEFAULT`.
 
-Runtime rules arrive between 3 and 4, so an ENV pin keeps beating any
-database rule and keeps working with the database down.
+An ENV pin beats any database rule and keeps working with the database down.
 
 **Test overrides beat guards.** Layer 1 answers before layer 2, so
 `with_flag(:demo_pages, true)` turns a `forbidden_in: :production` flag on
 even in production. That is what you want when testing the feature itself,
 but it means a spec cannot prove a guard with `with_flag`. Use a real ENV pin
 instead; see [Testing a guard](#testing-a-guard).
+
+## Runtime rules
+
+Runtime rules change a flag without a redeploy, and let it differ per
+account, organisation, phone or other unit. Each flag has at most one rule,
+stored in the app's own database (Postgres). They are off by default: with
+`config.runtime_rules` false, nothing reads a database, ActiveRecord is never
+loaded by the gem, and every flag behaves exactly as in 0.1.0.
+
+This release has the read path. Rules are written through audited
+operations in the next release; until then they can be written directly to
+the tables, or held in a `MemoryStore`.
+
+### Turning them on
+
+```bash
+bin/rails g standard_flags:migrations      # existing installs
+bin/rails g standard_flags:install --runtime   # new installs: also writes the migration
+bin/rails db:migrate
+```
+
+```ruby
+# config/initializers/standard_flags.rb
+StandardFlags.configure do |config|
+  config.runtime_rules = true
+  config.refresh_interval = 5                    # seconds between revision checks
+  config.segment_resolver = ->(name, context) { Segments.member?(name, context.account) }
+end
+```
+
+The migration creates four tables, with UUID keys when the app's generators
+use them (`config.generators { |g| g.orm :active_record, primary_key_type: :uuid }`).
+All four are new, so every index and constraint is created inside
+`create_table` and StrongMigrations accepts it.
+
+| Table | Holds |
+|-------|-------|
+| `standard_flags_rules` | One row per flag: `status` (draft, running, paused, stopped), `hash_version` and `salt`, `percentage_bps` (0–10,000), `rollout_value`, `variant_weights`, `fallthrough_value`, `stop_value`, `conditions` (platforms, version ranges, segments), attached `cohorts`, `member_count`. |
+| `standard_flags_cohorts` | Named, reusable member lists of one unit, such as staff accounts. |
+| `standard_flags_memberships` | A unit key in exactly one rule or cohort, with the value it serves and an optional `expires_at`. Removed rows keep `removed_at`. |
+| `standard_flags_state` | One row; `revision` moves on every change. |
+
+Stored values are strings: `on`/`off` for on/off kinds, a mode value, or a
+variant. The models live in `lib/` (never `app/models`) and have no
+associations. Unit keys can be phone numbers or emails, so they are kept out
+of logs and consoles; see [Privacy](#privacy).
+
+### How a rule decides
+
+The rule's status decides first:
+
+| Status | Serves |
+|--------|--------|
+| `draft` | Nothing: the code default. |
+| `paused` | The code default. Its settings are kept, so it can resume. |
+| `stopped` | `stop_value` to everyone. Reason `STATIC`, rule `stopped`. |
+| `running` | The first of the steps below that answers. |
+
+1. **Direct members** of this unit. A member serving the flag's off value
+   (a deny) wins over any other. `TARGETING_MATCH`, rule `deny` or `allow`.
+2. **Attached cohorts** the unit belongs to. A cohort serving the off value
+   wins; otherwise the first match in declared order. Rule `cohort:<key>`.
+3. **Segments**, each asked of `config.segment_resolver.call(name,
+   context)` in order. Skipped when no resolver is set. Rule `segment:<name>`.
+4. **Client conditions**: `platforms` and `versions` (`{ "android" =>
+   ">= 1.4.0" }`, compared with `Gem::Requirement` against
+   `context.client[:platform]` and `[:version]`). When they aren't met, the
+   rule skips straight to the fallthrough.
+5. **Percentage and variants.** A unit whose rollout bucket is below
+   `percentage_bps` gets `rollout_value` (on/off kinds default to `on`), reason
+   `SPLIT`, rule `percentage`. With `variant_weights` (summing to 10,000),
+   units inside the percentage, or every unit when there is no percentage,
+   get a variant by a separate variant bucket, rule `variants`. Hash version
+   1 uses `Bucket.v1(salt, key)` for both decisions; version 2 uses
+   `Bucket.v2("rollout" | "variant", salt, key)`.
+6. **Fallthrough**: `fallthrough_value` if set (`TARGETING_MATCH`, rule
+   `fallthrough`), otherwise the code default.
+
+A kill switch served `false` from a rule reads as `KILL_SWITCH`, so throwing
+one from the database looks the same as pinning it off.
+
+When a rule needs the unit (it has members, cohorts, segments, a percentage
+or weights) and the context has no key for the flag's unit, the result is
+the fallthrough or the code default with reason `ERROR` and error code
+`TARGETING_KEY_MISSING`. That emits `targeting_key_missing.standard_flags`
+but reports nothing, because reads with no unit are often legitimate. A
+stored value the flag can't take (an unknown mode value, weights that don't
+sum, a bad version range) fails only that flag: its `fail:` value with
+`PARSE_ERROR`, reported once through the error reporter.
+
+### What a read costs
+
+* **Rules** are cached per process in an immutable snapshot: every rule,
+  plus each cohort's key, unit and member count, never its members. On an
+  evaluation, once `refresh_interval` has passed, one query reads
+  `standard_flags_state.revision`, and the rules reload only when it moved.
+  No background thread is started, so it is safe under forking servers.
+* **Memberships** cost one indexed query per unit key per unit of work: it
+  returns that unit's live memberships across every rule and cohort, and is
+  memoised through the executor. Twenty flags checked for one account in a
+  request cost one query. It is skipped entirely when the flag's rule has no
+  members and no attached cohort with members.
+* **Lists** load in one query with `StandardFlags.preload`, so a loop
+  doesn't run a query per record:
+
+  ```ruby
+  StandardFlags.preload(:account, accounts)
+  accounts.each { |account| notify(account) if StandardFlags.on?(:new_checkout, for: { account: account }) }
+  ```
+
+* **One revision per unit of work.** The first evaluation in a request or
+  job pins the rules snapshot, and every later evaluation in that run reuses
+  it, so a page, a client payload or a loop never mixes two revisions.
+  Outside an executor run each evaluation reads the process cache.
+
+The spec suite asserts each of these query counts against Postgres.
+
+### When the database is unavailable
+
+The process keeps serving the last good snapshot, marks it stale, reports the
+error once and emits `runtime_stale.standard_flags`; it tries again one
+interval later. A process that has never loaded rules serves code defaults.
+Inside a host transaction every read runs in a savepoint, so a failed read
+can't abort the host's transaction. The read path never raises.
+
+When a unit's membership lookup fails, the failure is reported once and
+remembered for the rest of the unit of work, so an outage costs one failed
+query per unit per request, not one per flag. Flags that needed it skip the
+direct-member and cohort steps and carry on through segments, the split and
+the fallthrough (or the code default), with reason `ERROR`, error code
+`GENERAL` and the deciding step's `rule_id`. `StandardFlags.preload` never
+raises either: on a store error, or a unit `key:` that raises, it reports
+once (by error class, never a unit key) and returns 0, and each evaluation
+then reads on its own.
+
+A stored row whose shape no rule can have (`conditions` that isn't an
+object, a cohort attachment that isn't an object, and so on) fails only its
+flag, with `PARSE_ERROR` and `rule_invalid.standard_flags`, like an
+unservable value.
+
+### Without a database
+
+`config.runtime_store` takes any `StandardFlags::Runtime::Store`. The
+in-memory `MemoryStore` serves specs and apps without a database:
+
+```ruby
+store = StandardFlags::Runtime::MemoryStore.new
+store.put_rule(:new_checkout, status: :running, percentage_bps: 500)
+store.put_cohort(:staff, unit: :account)
+store.add_member(cohort: :staff, unit: :account, unit_key: "42", value: true)
+store.put_rule(:new_checkout, cohorts: { staff: true })
+StandardFlags.configure { |c| c.runtime_rules = true; c.runtime_store = store }
+```
+
+### Privacy
+
+Unit keys are stored raw, because writes and lookups need the real value.
+The gem keeps them out of the places it controls:
+
+* `Membership` values hide `unit_key` from `inspect`, `to_s` and `pp` (the
+  console's inspector). `to_h` still includes it.
+* When runtime rules are on, the engine adds `unit_key` to
+  `ActiveRecord::Base.filter_attributes`, which is what ActiveRecord's SQL
+  log filters bind values through; a model's own filter doesn't reach the
+  log. The setting is global, so any other model's `unit_key` column is
+  filtered too; the name is deliberately narrow.
+* Membership read errors are reported by error class only, without the
+  driver's message or cause, which can quote the value.
+
+That filter can't help when the connection has **prepared statements off**
+(`prepared_statements: false`, common behind a transaction-mode connection
+pooler): values are then inlined into the SQL text, which reaches SQL logs,
+`sql.active_record` payloads and APM span descriptions as written. The
+health check warns in that case. Either keep prepared statements on for the
+connection, or make sure those sinks scrub SQL text.
+
+### Migrated flags
+
+A flag moved from another system declares `bucketing: { version: 1, salt:
+"old_key" }` so its units keep their buckets; the rule copies those values
+when it is first written, and its salt never changes afterwards.
 
 ## Environment variables
 
@@ -426,6 +628,10 @@ end
 | `pin_rejected.standard_flags` | An ENV pin that didn't parse. |
 | `forbidden.standard_flags` | A `forbidden_in` flag pinned on where it's forbidden. |
 | `legacy_env.standard_flags` | A legacy env name in use. |
+| `runtime_refresh.standard_flags` | Runtime rules reloaded (revision, rule count). |
+| `runtime_stale.standard_flags` | A runtime refresh failed; the last good rules (or code defaults) keep serving. |
+| `rule_invalid.standard_flags` | A stored rule holds something its flag can't serve. |
+| `targeting_key_missing.standard_flags` | A rule needs a unit key the context doesn't have. |
 
 Built-in subscribers: **Logger** (always), **Metrics** (`Sentry::Metrics`
 counters when sentry-ruby is loaded) and **Sentry** (handled warnings for
@@ -434,9 +640,33 @@ already go to `Rails.error`; enable it only when `Rails.error` isn't wired to
 your error tracker. Add your own with
 `config.add_notifier(->(name, payload) { ... })`.
 
+Errors the gem reports (rejected and forbidden pins, unknown flags,
+evaluation errors, invalid runtime rules, runtime store failures) go through
+`Rails.error.report` as handled warnings. Set
+`config.error_reporter = ->(error, context) { ... }` to send them somewhere
+else instead; if it raises, the report falls back to `Rails.error`.
+
 ## Health check and diagnostics
 
-With [standard_health](https://github.com/rarebit-one/standard_health):
+With [standard_health](https://github.com/rarebit-one/standard_health) 0.9 or
+later, the gem contributes its check through standard_health's load hook, so
+an app that calls `register_default_checks` gets it as `:standard_flags`
+(non-critical) with nothing else to write. Opt out or override it by name:
+
+```ruby
+StandardHealth.configure do |c|
+  c.register_default_checks standard_flags: { critical: true }   # or false to skip it
+end
+```
+
+It also contributes env vars to the env audit: the `STANDARD_FLAGS_<KEY>` pin
+and legacy `env:` names of every `forbidden_in:` flag, as `forbidden` in
+those environments whenever they pin the flag on. Other pins are optional,
+which the env spec has no level for, so they aren't declared. The app's own
+`env_spec` entry for a name wins.
+
+On older standard_health, or without `register_default_checks`, register it
+yourself:
 
 ```ruby
 StandardHealth.configure do |c|
@@ -444,9 +674,13 @@ StandardHealth.configure do |c|
 end
 ```
 
-The check fails when a `forbidden_in` flag is pinned on, and warns on
-unparseable pins, legacy names in use, flags past `remove_by`, and
-`STANDARD_FLAGS_*` variables that match no flag. standard_health has no
+The check fails when a `forbidden_in` flag is pinned on, or when runtime
+rules are on and their tables are missing. It warns on unparseable pins,
+legacy names in use, flags past `remove_by`, `STANDARD_FLAGS_*` variables that
+match no flag, a runtime store that can't be reached (flags keep serving
+through a database blip, so this isn't a failure), a stale runtime snapshot,
+prepared statements being off (see [Privacy](#privacy)), and runtime rules for
+undeclared or tombstoned keys. standard_health has no
 warning status, so warnings ride on the row (`warnings:`) and the check stays
 `:ok`; pass `warn_as: :fail` to let them degrade the tier. It is non-critical
 by default. There is no dependency on standard_health unless you reference
@@ -455,8 +689,12 @@ the check.
 `StandardFlags::Diagnostics.report` returns the same picture as a hash for a
 diagnostics page: each flag's value, reason, deciding variable and whether
 it is permanent, plus
-forbidden, rejected, legacy and unknown pins and stale flags. It contains
-variable names only, never raw environment values.
+forbidden, rejected, legacy and unknown pins and stale flags. With runtime
+rules on it adds each flag's `rule_status` and a `runtime:` section (store,
+readiness, any unreachable error class, store warnings, revision, snapshot
+age, staleness and each rule's status), and
+`flags:list` gains a `rule` column and a header line with the revision and
+age. It contains variable names only, never raw environment values.
 
 ## Testing
 
@@ -476,8 +714,24 @@ it "shows the new checkout", flags: { new_checkout: true } do
 end
 ```
 
-Overrides are the first evaluation layer, so they beat guards, ENV pins and
-defaults without touching `ENV`. Unknown keys, wrong kinds and undeclared
+Runtime rules, held in an in-memory store for the example (no database,
+whatever the app's runtime configuration):
+
+```ruby
+with_rule(:new_checkout, percentage: 5_000)                  # running, 50%
+with_rule(:new_checkout, status: :stopped, stop: true)
+with_rule(:strict_gates, fallthrough: :sensor, platforms: %w[ios], versions: { ios: ">= 2.0" })
+with_rule(:home_hero, variants: { "control" => 5_000, "savings" => 5_000 })
+with_members(:new_checkout, account, value: false)           # a deny; records or keys
+with_cohort(:staff, unit: :account, members: [ alice, bob ])
+with_rule(:new_checkout, cohorts: { staff: true })
+```
+
+Salts and hash versions default to the flag's `bucketing:`, else the key and
+version 2. Values are checked against the declaration.
+
+Overrides are the first evaluation layer, so they beat guards, ENV pins,
+runtime rules and defaults without touching `ENV`. Unknown keys, wrong kinds and undeclared
 values raise; unknown keys raise on read too (strict mode); everything resets
 after each example.
 
@@ -514,12 +768,15 @@ context in, the expected value, variant, reason, error code and deciding
 variable out. `bucket_vectors.json` pins test vectors for every bucketing
 version. The Ruby suite runs every case. Evaluators in other languages (a
 Kotlin or TypeScript client, say) run the same files, so they cannot drift
-from the server on what a flag evaluates to.
+from the server on what a flag evaluates to. `runtime/*.json` adds runtime
+rules: each case's rule, cohorts and memberships plus a context (unit keys,
+client, segments) in; value, variant, reason, error code and `rule_id` out,
+including the v1 and v2 bucket boundaries.
 
 ## Bucketing
 
 `StandardFlags::Bucket` holds the bucketing contract for percentage rollouts
-and experiments. It is not used by evaluation yet.
+and variant splits in runtime rules.
 
 ```ruby
 StandardFlags::Bucket.v1(salt, unit_key)              # SHA-256("salt:unit_key")[0, 15] hex % 10_000
@@ -531,13 +788,16 @@ StandardFlags::Bucket.sql_v2(column: "devices.id")    # the Postgres twin; bind 
 Buckets are basis points (0–9,999). A nil or blank unit key returns nil (the
 caller maps it to `TARGETING_KEY_MISSING`), never a random bucket. These
 functions are permanent: a new algorithm gets a new version and existing
-flags keep theirs.
+flags keep theirs. The Postgres CI job checks `sql_v2` against `v2` for
+every vector.
 
 ## Roadmap
 
 Phase 2 adds runtime rules stored in the database (changes without a
 redeploy, allow and deny lists, cohorts, sticky percentage rollouts with
-per-flag salts), audited write operations and an admin generator. Phase 3
+per-flag salts), audited write operations and an admin generator. The read
+path is on `main`; the write operations and rake tasks come next, then MCP
+tools, the admin generator and an OpenFeature provider. Phase 3
 adds client delivery: an OpenFeature remote-evaluation (OFREP) endpoint,
 client version targeting, a minimum-version endpoint and the manifest
 contract checked in client CI. Phase 4 adds experiment exposure tracking and

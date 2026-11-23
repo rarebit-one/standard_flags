@@ -47,6 +47,17 @@ module StandardFlags
         memo.fetch(key) { memo[key] = yield }
       end
 
+      def key?(key)
+        store&.key?(key) || false
+      end
+
+      # Stores `value` under `key` when a unit of work is open; a no-op
+      # otherwise. Used to preload many entries with one query.
+      def write(key, value)
+        memo = store
+        memo[key] = value if memo
+      end
+
       private
 
       def store

@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Runtime rules (read path), opt-in.** `config.runtime_rules` (default
+  false) and `config.refresh_interval` (default 5 seconds). With runtime rules
+  off, behaviour is unchanged and the gem never loads ActiveRecord.
+- **Migrations generator.** `bin/rails g standard_flags:migrations`, and
+  `standard_flags:install --runtime`, write one migration creating
+  `standard_flags_rules`, `standard_flags_cohorts`,
+  `standard_flags_memberships` and the single-row `standard_flags_state`, with
+  UUID keys when the app generates them. It passes StrongMigrations.
+- **Runtime resolver** between the ENV pin and the code default. Draft and
+  paused rules serve the code default, stopped rules their stop value, and
+  running rules walk deny, allow, cohorts, segments, client conditions,
+  percentage and variants, then the fallthrough. `Evaluation#rule_id` names
+  the step that decided. A missing unit key returns `TARGETING_KEY_MISSING`;
+  an unservable stored value fails only its flag with `PARSE_ERROR`.
+- **Process cache** of the rules table: an immutable snapshot refreshed
+  lazily on evaluation when the revision moves, no background thread, last
+  good snapshot (marked stale) on database errors, code defaults before the
+  first load.
+- **Memberships** read in one query per unit key per unit of work, skipped
+  when no rule could match; `StandardFlags.preload(unit, records_or_keys)`
+  reads many in one query and never raises. A failed lookup is remembered
+  for the unit of work; its flags skip members and cohorts and carry on with
+  reason `ERROR` / `GENERAL`.
+- **One rules snapshot per unit of work**, pinned by the first evaluation,
+  so a request or job never mixes revisions.
+- **Stores.** `StandardFlags::Runtime::ActiveRecordStore` (the default) and
+  `MemoryStore` (specs, apps without a database), via `config.runtime_store`.
+- **Registry.** `unit ..., key: ->(actor) { ... }` normalises unit keys
+  (default `record.id.to_s`, else the value; blank is missing).
+  `bucketing: { version: 1 | 2, salt: }` on flags, modes and experiments.
+- **`config.segment_resolver`** answers segment conditions.
+- **Test helpers** `with_rule`, `with_members` and `with_cohort` (and
+  `StandardFlags::Testing.rule/members/cohort`), backed by `MemoryStore` and
+  reset after each example.
+- **Health and diagnostics.** The health check fails when runtime rules are
+  on and their tables are missing. It warns when the store can't be reached,
+  on a stale snapshot, when prepared statements are off (unit keys would be
+  inlined into SQL text), and on rules for undeclared or tombstoned keys.
+  Diagnostics and `flags:list` show each rule's status and the snapshot's
+  revision and age.
+- **Privacy.** With runtime rules on, `unit_key` is added to
+  `ActiveRecord::Base.filter_attributes` so SQL logs filter it; `Membership`
+  hides it from `inspect` and `pp`; read errors are reported by class only.
+- **standard_health contributions.** On standard_health 0.9+, the gem
+  contributes its check (`:standard_flags`, non-critical) to
+  `register_default_checks` and declares the pins of `forbidden_in:` flags in
+  the env audit. Registering `StandardFlags::HealthCheck` by hand still works.
+- **`config.error_reporter`** = `->(error, context) { ... }` replaces
+  `Rails.error` for every report the gem makes, falling back to `Rails.error`
+  if it raises.
+- **Notifications** `runtime_refresh`, `runtime_stale`, `rule_invalid` and
+  `targeting_key_missing` (`.standard_flags`), with Logger lines.
+- **Conformance** fixtures for runtime rules
+  (`spec/fixtures/conformance/runtime/`), and a Postgres CI job that runs the
+  database specs, including `Bucket.v2` against `Bucket.sql_v2`.
+
 ## [0.1.0] - 2026-11-22
 
 ### Added

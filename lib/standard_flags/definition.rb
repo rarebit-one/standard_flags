@@ -18,19 +18,25 @@ module StandardFlags
 
     COMMON_ATTRIBUTES = %i[owner description default env inverted forbidden_in fail expose unit].freeze
     ATTRIBUTES = {
-      flag: COMMON_ATTRIBUTES + %i[remove_by final permanent],
+      flag: COMMON_ATTRIBUTES + %i[remove_by final permanent bucketing],
       kill_switch: COMMON_ATTRIBUTES,
-      mode: COMMON_ATTRIBUTES + %i[preset values],
-      experiment: COMMON_ATTRIBUTES + %i[variants],
+      mode: COMMON_ATTRIBUTES + %i[preset values bucketing],
+      experiment: COMMON_ATTRIBUTES + %i[variants bucketing],
       compat: COMMON_ATTRIBUTES + %i[remove_by]
     }.freeze
 
     KEY_FORMAT = /\A[a-z][a-z0-9_]*\z/
     ENV_VAR_FORMAT = /\A[A-Z][A-Z0-9_]*\z/
     WIRE_FORMAT = /\A[A-Za-z][A-Za-z0-9_]*\z/
+    HASH_VERSIONS = [ 1, 2 ].freeze
+
+    # A declared `bucketing: { version:, salt: }`, for a flag migrated from
+    # another system that must keep its old buckets. Copied into the flag's
+    # runtime rule when the rule is first created.
+    Bucketing = Data.define(:version, :salt)
 
     attr_reader :key, :kind, :owner, :description, :env, :inverted, :forbidden_in,
-                :expose, :unit, :remove_by, :final, :values, :variants, :permanent
+                :expose, :unit, :remove_by, :final, :values, :variants, :permanent, :bucketing
 
     def initialize(kind, key, attributes)
       @kind = kind.to_sym
@@ -113,6 +119,15 @@ module StandardFlags
       value ? "on" : "off"
     end
 
+    # The value a stored runtime string stands for ("on"/"off", a mode value,
+    # a variant), or Parser::INVALID when this flag can't take it.
+    def value_from_wire(text)
+      return Parser::INVALID unless text.is_a?(String)
+      return { "on" => true, "off" => false }.fetch(text, Parser::INVALID) if boolean?
+
+      allowed_values.find { |value| value.to_s == text } || Parser::INVALID
+    end
+
     # The canonical pin, STANDARD_FLAGS_<KEY>. It is never inverted.
     def canonical_env_var
       "STANDARD_FLAGS_#{key.to_s.upcase}"
@@ -172,6 +187,7 @@ module StandardFlags
       @fail = attributes.key?(:fail) ? coerce(attributes[:fail], :fail) : nil
       @final = attributes.key?(:final) ? coerce(attributes[:final], :final) : nil
       @permanent = attributes.fetch(:permanent, false)
+      @bucketing = normalize_bucketing(attributes[:bucketing])
     end
 
     def validate!
@@ -179,6 +195,7 @@ module StandardFlags
       validate_flag_lifecycle!
       validate_env!
       validate_forbidden_in!
+      fail!("bucketing: needs a unit: to bucket") if bucketing && unit.nil?
     end
 
     def validate_flag_lifecycle!
@@ -239,6 +256,21 @@ module StandardFlags
       return coerce(default, :default) unless default.is_a?(Hash)
 
       default.to_h { |env_name, value| [ env_name.to_s, coerce(value, :default) ] }.freeze
+    end
+
+    def normalize_bucketing(bucketing)
+      return nil if bucketing.nil?
+      fail!("bucketing: must be a Hash with version: and salt:") unless bucketing.is_a?(Hash)
+
+      bucketing = bucketing.transform_keys(&:to_sym)
+      unknown = bucketing.keys - %i[version salt]
+      fail!("bucketing: has unknown key(s): #{unknown.map(&:inspect).join(', ')}") unless unknown.empty?
+      version = bucketing[:version]
+      salt = bucketing[:salt]
+      fail!("bucketing: version: must be one of #{HASH_VERSIONS.inspect}") unless HASH_VERSIONS.include?(version)
+      fail!("bucketing: salt: must be a non-blank String") unless salt.is_a?(String) && !salt.strip.empty?
+
+      Bucketing.new(version: version, salt: salt.dup.freeze)
     end
 
     def normalize_expose(expose)

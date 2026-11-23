@@ -9,6 +9,12 @@ module StandardFlags
   # * pin_rejected.standard_flags — an ENV pin that didn't parse
   # * forbidden.standard_flags    — a `forbidden_in` flag pinned on
   # * legacy_env.standard_flags   — a legacy env name in use
+  # * runtime_refresh.standard_flags       — runtime rules reloaded
+  # * runtime_stale.standard_flags         — a runtime refresh failed; the
+  #                                          last good rules keep serving
+  # * rule_invalid.standard_flags          — a stored rule its flag can't serve
+  # * targeting_key_missing.standard_flags — a rule needs a unit key the
+  #                                          context doesn't have
   #
   # @api private
   class Subscribers

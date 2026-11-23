@@ -30,6 +30,26 @@ module StandardFlags
     attr_accessor :controller_responder
     # Whose wire name `requires_flag` reports in `meta.feature`.
     attr_accessor :default_audience
+    # Runtime rules (rules stored in the app's database, between the ENV pin
+    # and the code default). Off by default; when off, nothing touches a
+    # database and ActiveRecord is never loaded. Turn on only after running
+    # `bin/rails g standard_flags:migrations` and migrating.
+    attr_accessor :runtime_rules
+    # Seconds between checks of the stored revision. Each check is one query;
+    # rules reload only when the revision has moved.
+    attr_accessor :refresh_interval
+    # Where runtime rules are read from. nil means the ActiveRecord store;
+    # pass a StandardFlags::Runtime::MemoryStore (or any Store) to run
+    # without a database.
+    attr_accessor :runtime_store
+    # `call(error, context)` replaces Rails.error for every report the gem
+    # makes (rejected and forbidden pins, unknown flags, evaluation errors,
+    # invalid runtime rules, runtime store failures). nil uses Rails.error;
+    # a reporter that raises falls back to it.
+    attr_reader :error_reporter
+    # `call(segment_name, context)` answers whether the context belongs to an
+    # app-defined segment. nil skips segment conditions.
+    attr_accessor :segment_resolver
 
     attr_writer :strict, :env_source
     attr_reader :extra_notifiers
@@ -47,6 +67,11 @@ module StandardFlags
       @typescript_path = "app/javascript/types/standard_flags.d.ts"
       @controller_responder = nil
       @default_audience = :web
+      @runtime_rules = false
+      @refresh_interval = 5
+      @runtime_store = nil
+      @segment_resolver = nil
+      @error_reporter = nil
       @strict = nil
       @env_source = nil
       @extra_notifiers = []
@@ -67,6 +92,12 @@ module StandardFlags
 
     # Adds a subscriber that responds to `call(event_name, payload)` for every
     # `*.standard_flags` event.
+    def error_reporter=(reporter)
+      raise ArgumentError, "error_reporter must respond to call(error, context)" unless reporter.nil? || reporter.respond_to?(:call)
+
+      @error_reporter = reporter
+    end
+
     def add_notifier(notifier)
       raise ArgumentError, "notifier must respond to call(event_name, payload)" unless notifier.respond_to?(:call)
 

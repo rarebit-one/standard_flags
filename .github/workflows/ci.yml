@@ -22,3 +22,47 @@ jobs:
       extra-lint-commands: |
         bundle exec brakeman --no-pager --force
         bundle exec bundler-audit --update
+
+  # The suite again against Postgres, so the :db specs run: the generated
+  # migration under StrongMigrations, the ActiveRecord store, the query-count
+  # specs, and Bucket.v2 against Bucket.sql_v2. The reusable matrix above has
+  # no DATABASE_URL, so it skips them and stays database-free.
+  test-postgres:
+    name: test (postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:44c4ee9810eff91f7eab4d822642e01115b1a9eccce4bcbdde7604752d68eac6
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: standard_flags_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --mount type=tmpfs,destination=/var/lib/postgresql/data
+    env:
+      RAILS_ENV: test
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/standard_flags_test
+      REQUIRE_DATABASE: "1"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@be3c7df29b3349ec6bcfc6b4792f1cf9f5237d18 # v1.343.0
+        with:
+          ruby-version: 4.0.10
+          bundler-cache: true
+
+      - name: Run tests on PostgreSQL
+        run: bundle exec rspec

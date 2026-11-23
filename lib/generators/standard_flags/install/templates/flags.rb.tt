@@ -10,9 +10,10 @@ StandardFlags.define do
   # RAILS_ENV=production.
   # env_resolver -> { ENV.fetch("APP_ENVIRONMENT", Rails.env) }
 
-  # Units a flag can target. Carried in the context today; used for targeting
-  # once runtime rules arrive.
+  # Units a flag can target. Runtime rules match a unit by its key: by
+  # default record.id.to_s, or the value itself; key: normalises it.
   # unit :account, from: ->(ctx) { ctx.account }
+  # unit :phone, from: ->(ctx) { ctx.phone }, key: ->(phone) { phone.to_s.delete("^0-9+") }
 
   # A release flag: temporary, so it needs remove_by: and the final: value it
   # settles on.

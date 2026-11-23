@@ -14,13 +14,26 @@ module StandardFlags
       definition = registry[key]
       return unknown(registry, key) unless definition
 
-      evaluation = Memo.fetch([ key, context.cache_key ]) { resolve(registry, definition, context) }
+      evaluation = Memo.fetch(memo_key(registry, definition, context)) { resolve(registry, definition, context) }
       sample(evaluation)
       evaluation
     end
 
+    # With runtime rules on, the answer depends on the flag's unit key, which
+    # a unit's `key:` can derive from something other than the actor's id;
+    # so the resolved key joins the memo key.
+    def memo_key(registry, definition, context)
+      key = [ definition.key, context.cache_key ]
+      return key unless definition.unit && Runtime.enabled?
+
+      key + [ Runtime.unit_key(registry, definition, context) ]
+    rescue StandardError
+      key + [ Runtime::UNRESOLVED ]
+    end
+
     def resolve(registry, definition, context)
       request = Resolvers::Request.new(
+        registry: registry,
         definition: definition,
         context: context,
         env_name: (context.env || registry.current_env).to_s,

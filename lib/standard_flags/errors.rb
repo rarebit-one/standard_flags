@@ -32,4 +32,8 @@ module StandardFlags
   # Reported (never raised) through Rails.error when a `forbidden_in` flag is
   # pinned on in an environment that forbids it.
   class ForbiddenPin < Error; end
+
+  # Reported (never raised) through Rails.error when a stored runtime rule
+  # holds something its flag can't serve. Only that flag fails.
+  class RuleInvalid < Error; end
 end
