@@ -41,11 +41,32 @@ module StandardFlags
         end
       end
 
+      # false when a table is missing; raises (so the health check warns
+      # instead of failing) when the database can't be reached.
       def ready?
         Models::Record.with_connection { |connection| TABLES.all? { |table| connection.data_source_exists?(table) } }
+      rescue ::ActiveRecord::StatementInvalid => e
+        raise unless e.cause&.class&.name == "PG::UndefinedTable"
+
+        false
+      end
+
+      # With prepared statements off (common behind a transaction-mode
+      # pooler), bind values are inlined into the SQL text, so unit keys reach
+      # SQL logs, notification payloads and APM spans unfiltered.
+      def warnings
+        return [] if prepared_statements?
+
+        [ "prepared statements are off, so unit keys are inlined into membership lookup SQL " \
+          "(logs, APM spans); see the README's runtime rules privacy notes" ]
       end
 
       private
+
+      def prepared_statements?
+        value = Models::Record.connection_db_config.configuration_hash.fetch(:prepared_statements, true)
+        ::ActiveRecord::Type::Boolean.new.cast(value) != false
+      end
 
       def membership(row)
         attributes = MEMBERSHIP_COLUMNS.zip(row).to_h

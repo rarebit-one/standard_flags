@@ -32,7 +32,7 @@ RSpec.describe "runtime rules in diagnostics", registry: RuntimeHelpers::REGISTR
     enable(store)
     store.put_rule(:new_checkout, status: :running, percentage_bps: 500)
     report = StandardFlags::Diagnostics.report
-    expect(report[:runtime]).to include(enabled: true, ready: true, loaded: true, stale: false, revision: 1,
+    expect(report[:runtime]).to include(enabled: true, ready: true, unreachable: nil, warnings: [], loaded: true, stale: false, revision: 1,
                                         store: "StandardFlags::Runtime::MemoryStore")
     expect(report[:runtime][:rules]).to eq([ { key: :new_checkout, status: "running", percentage_bps: 500,
                                                member_count: 0, cohorts: [], orphan: nil } ])
@@ -78,10 +78,40 @@ RSpec.describe "runtime rules in diagnostics", registry: RuntimeHelpers::REGISTR
       expect(described_class.new.run[:warnings].first).to match(/\Aruntime rules are stale: the last refresh failed \(serving revision 1, [\d.]+s old\)\z/)
     end
 
-    it "treats a store that raises on ready? as not ready" do
+    it "warns, not fails, when the store can't be reached, keeping the stale warning" do
+      enable(broken)
+      broken.put_rule(:new_checkout, status: :running)
+      StandardFlags::Runtime.snapshot
+      broken.fail_reads = true
+      StandardFlags::Runtime.clock = -> { 1e9 }
+      allow(broken).to receive(:ready?)
+        .and_raise(StandardFlags::Runtime::StoreError.new("ready check failed", cause_class: "PG::ConnectionBad"))
+      result = described_class.new.run
+      expect(result).to include(status: :ok)
+      expect(result[:warnings]).to include(
+        "runtime rules store is unreachable (PG::ConnectionBad); flags keep serving the last good snapshot",
+        a_string_starting_with("runtime rules are stale: the last refresh failed (serving revision 1,")
+      )
+      expect(StandardFlags::Diagnostics.report[:runtime]).to include(ready: false, unreachable: "PG::ConnectionBad")
+    end
+
+    it "names the error class when the store raises something else on ready?" do
       enable(broken)
       allow(broken).to receive(:ready?).and_raise("down")
-      expect(described_class.new.run).to include(status: :fail)
+      expect(StandardFlags::Diagnostics.report[:runtime]).to include(ready: false, unreachable: "RuntimeError")
+      expect(described_class.new.run).to include(status: :ok)
+    end
+
+    it "passes on the store's own warnings" do
+      enable(store)
+      allow(store).to receive(:warnings).and_return([ "prepared statements are off" ])
+      expect(described_class.new.run[:warnings]).to eq([ "prepared statements are off" ])
+    end
+
+    it "ignores a store whose warnings raise" do
+      enable(store)
+      allow(store).to receive(:warnings).and_raise("down")
+      expect(described_class.new.run).not_to have_key(:warnings)
     end
   end
 

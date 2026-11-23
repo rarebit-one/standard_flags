@@ -11,8 +11,10 @@ module StandardFlags
   # * Fails when a `forbidden_in` flag is pinned on in this environment, or
   #   when runtime rules are on and their tables are missing.
   # * Warns on unparseable pins, legacy env names in use (deprecated), flags
-  #   past remove_by, STANDARD_FLAGS_* variables that match no flag, a stale
-  #   runtime-rule snapshot, and rules for undeclared or tombstoned keys.
+  #   past remove_by, STANDARD_FLAGS_* variables that match no flag, a
+  #   runtime-rule store that can't be reached, a stale runtime-rule
+  #   snapshot, store warnings (such as prepared statements being off), and
+  #   rules for undeclared or tombstoned keys.
   #
   # standard_health has no warning status, so warnings ride on the row as
   # `warnings:` and the check stays :ok. Pass `warn_as: :fail` to let them

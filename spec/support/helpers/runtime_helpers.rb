@@ -1,6 +1,7 @@
 # Shared pieces for the runtime-rule specs.
 module RuntimeHelpers
   Account = Struct.new(:id)
+  User = Struct.new(:id, :phone)
 
   REGISTRY = proc do
     unit :account, from: ->(ctx) { ctx.account }
@@ -11,6 +12,25 @@ module RuntimeHelpers
     kill_switch :ai_assistant, owner: "assistant", unit: :account
     mode :strict_gates, owner: "platform", preset: :sensor, unit: :account
     experiment :home_hero, owner: "growth", variants: %w[control savings privacy], unit: :account
+  end
+
+  # A unit keyed by an attribute that isn't the record's id.
+  USER_BY_PHONE = proc do
+    unit :user, from: ->(ctx) { ctx.user }, key: ->(user) { user.phone }
+    flag :beta, owner: "growth", remove_by: "2099-01-01", final: true, unit: :user
+  end
+
+  # Serves fixed rule rows as loaded, bypassing MemoryStore's normalisation,
+  # so specs can hold shapes only a hand-written row would have.
+  class RawStore < StandardFlags::Runtime::Store
+    def initialize(*rules)
+      super()
+      @rules = rules
+    end
+
+    def revision = 1
+    def load = StandardFlags::Runtime::Loaded.new(rules: @rules, cohorts: [])
+    def memberships(*) = []
   end
 
   def account(id)

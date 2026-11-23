@@ -44,13 +44,15 @@ module StandardFlags
 
       # Running rules for flags of `unit` that have direct members or an
       # attached cohort with members: the only ones a membership lookup can
-      # change.
+      # change. A malformed rule doesn't count; evaluating it fails that flag.
       def member_rules?(registry, unit)
         rules.each_value.any? do |rule|
           definition = registry[rule.key]
           next false unless rule.running? && definition && definition.unit == unit
 
           rule.members? || rule.cohort_attachments.any? { |key, _| cohort(key)&.member_count.to_i.positive? }
+        rescue Resolver::Invalid
+          false
         end
       end
     end

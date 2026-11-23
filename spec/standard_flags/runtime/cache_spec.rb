@@ -1,4 +1,5 @@
 require "spec_helper"
+require "timeout"
 
 RSpec.describe StandardFlags::Runtime::Cache, registry: RuntimeHelpers::REGISTRY do
   let(:store) { StandardFlags::Runtime::MemoryStore.new }
@@ -104,11 +105,54 @@ RSpec.describe StandardFlags::Runtime::Cache, registry: RuntimeHelpers::REGISTRY
     expect(store.reads[:revision]).to eq(1)
   end
 
-  it "takes a fresh lock after a fork and keeps the inherited snapshot" do
+  it "keeps the inherited snapshot and lock after a fork" do
     first = cache.snapshot
+    lock = cache.instance_variable_get(:@mutex)
     allow(Process).to receive(:pid).and_return(Process.pid + 1)
     expect(cache.snapshot).to equal(first)
     expect(cache.peek).to equal(first)
+    expect(cache.instance_variable_get(:@mutex)).to equal(lock)
+  end
+
+  it "never swaps its lock, so a refresh can't race another thread into unlocking the wrong one" do
+    racing = Class.new(StandardFlags::Runtime::MemoryStore) do
+      attr_accessor :during
+
+      def revision
+        hook = during
+        self.during = nil
+        hook&.call
+        super
+      end
+    end.new
+    racing.put_rule(:new_checkout, status: :running)
+    cache = described_class.new(racing, clock: -> { time.first })
+    first = cache.snapshot
+    advance(5)
+    child_pid = Process.pid + 1
+    racing.during = lambda do
+      allow(Process).to receive(:pid).and_return(child_pid)
+      Thread.new { cache.snapshot }.join
+    end
+    expect(cache.snapshot).to have_attributes(loaded: true, stale: false, revision: first.revision)
+  end
+
+  it "refreshes in a forked child even if another thread held the lock at fork time", if: Process.respond_to?(:fork) do
+    held = Queue.new
+    release = Queue.new
+    holder = Thread.new { cache.instance_variable_get(:@mutex).synchronize { held << true and release.pop } }
+    held.pop
+    pid = fork do
+      loaded = begin
+        Timeout.timeout(5) { cache.snapshot.loaded }
+      rescue StandardError
+        false
+      end
+      exit!(loaded ? 0 : 1)
+    end
+    release << true
+    holder.join
+    expect(Process.wait2(pid).last.exitstatus).to eq(0)
   end
 
   it "reports the snapshot's age" do

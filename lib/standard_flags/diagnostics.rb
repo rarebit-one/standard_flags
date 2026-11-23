@@ -37,20 +37,29 @@ module StandardFlags
         runtime_warnings(report[:runtime])
     end
 
-    # Runtime rules are on but their tables (or store) aren't there.
+    # Runtime rules are on but the store says their tables are missing. A
+    # store that can't be reached is a warning instead: flags keep serving
+    # the last good snapshot (or code defaults) through a database blip.
     def runtime_unavailable?(report)
-      runtime = report[:runtime]
-      !runtime.nil? && !runtime[:ready]
+      tables_missing?(report[:runtime])
+    end
+
+    def tables_missing?(runtime)
+      !runtime.nil? && !runtime[:ready] && runtime[:unreachable].nil?
     end
 
     def runtime_warnings(runtime)
-      return [] if runtime.nil? || !runtime[:ready]
+      return [] if runtime.nil? || tables_missing?(runtime)
 
       warnings = []
+      if runtime[:unreachable]
+        warnings << "runtime rules store is unreachable (#{runtime[:unreachable]}); flags keep serving the last good snapshot"
+      end
       if runtime[:stale]
         serving = runtime[:loaded] ? "revision #{runtime[:revision]}, #{runtime[:age]}s old" : "code defaults"
         warnings << "runtime rules are stale: the last refresh failed (serving #{serving})"
       end
+      warnings.concat(runtime[:warnings])
       warnings + runtime[:rules].select { |rule| rule[:orphan] }.map do |rule|
         "runtime rule for :#{rule[:key]} has no declared flag (#{rule[:orphan]})"
       end

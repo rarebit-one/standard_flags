@@ -5,7 +5,9 @@ module StandardFlags
     # revision (one query) and reloads only when the revision has moved.
     #
     # No background thread is started, so it is fork-safe: after a fork the
-    # child keeps the inherited snapshot and gets a fresh lock.
+    # child keeps the inherited snapshot. The lock is never replaced; Ruby
+    # releases a mutex held by a thread that doesn't survive the fork, and
+    # the forking thread can't be mid-refresh.
     #
     # If the store errors, the last good snapshot keeps serving, marked
     # stale; the error is reported once per class and `runtime_stale` is
@@ -22,12 +24,10 @@ module StandardFlags
         @clock = clock
         @snapshot = nil
         @mutex = Mutex.new
-        @pid = Process.pid
       end
 
       # The current snapshot, refreshed first if it is due. Never raises.
       def snapshot
-        reset_after_fork!
         current = @snapshot
         return current if fresh?(current)
 
@@ -81,13 +81,6 @@ module StandardFlags
 
       def now
         @clock ? @clock.call : Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      end
-
-      def reset_after_fork!
-        return if @pid == Process.pid
-
-        @pid = Process.pid
-        @mutex = Mutex.new
       end
     end
   end

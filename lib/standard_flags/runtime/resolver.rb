@@ -25,9 +25,14 @@ module StandardFlags
     #
     # A rule that needs the unit when the context has no key for it returns
     # the fallthrough (or the code default) with TARGETING_KEY_MISSING. A
-    # stored value the flag can't take fails only this flag (its fail value,
-    # PARSE_ERROR), reported once. A kill switch served false reads as
-    # KILL_SWITCH.
+    # stored value or shape the flag can't take fails only this flag (its
+    # fail value, PARSE_ERROR), reported once. A kill switch served false
+    # reads as KILL_SWITCH.
+    #
+    # When the unit's membership lookup fails, steps 1 and 2 are skipped and
+    # the rest still decide, marked ERROR / GENERAL with the deciding step's
+    # rule_id (none for the code default). The failure is memoised for the
+    # unit of work and reported once, so it costs one failed query.
     class Resolver
       # A stored rule this flag can't serve. Internal; reported as RuleInvalid.
       class Invalid < StandardError; end
@@ -82,16 +87,23 @@ module StandardFlags
           return missing_unit if key.nil? && rule.needs_unit?
 
           members = key ? memberships(key) : []
-          direct(members) || cohorts(members) || segments || (client_conditions_met? && split(key)) || fallthrough
+          return without_members(key) if members.equal?(LOOKUP_FAILED)
+
+          direct(members) || cohorts(members) || targeting(key)
+        end
+
+        def targeting(key)
+          segments || (client_conditions_met? && split(key)) || fallthrough
+        end
+
+        def without_members(key)
+          decided = targeting(key)
+          value = decided ? decided.value : definition.default_for(@request.env_name)
+          Evaluation.build(definition, value, reason: Reason::ERROR, error_code: ErrorCode::GENERAL, rule_id: decided&.rule_id)
         end
 
         def unit_key
-          return nil unless definition.unit
-
-          @request.registry.units[definition.unit]&.key_from(context)
-        rescue NoMethodError => e
-          # `from: ->(ctx) { ctx.account }` on a context with no account.
-          raise unless e.receiver.equal?(context)
+          Runtime.unit_key(@request.registry, definition, context)
         end
 
         # Skipped entirely when no direct member or attached cohort member
@@ -99,8 +111,11 @@ module StandardFlags
         def memberships(key)
           return [] unless rule.members? || attached_cohorts.any? { |cohort, _| cohort.member_count.positive? }
 
+          found = Runtime.memberships(definition.unit, key)
+          return found if found.equal?(LOOKUP_FAILED)
+
           now = Time.now
-          Runtime.memberships(definition.unit, key).select { |membership| membership.live?(now) }
+          found.select { |membership| membership.live?(now) }
         end
 
         def direct(members)
@@ -168,10 +183,10 @@ module StandardFlags
 
         def split(key)
           bps = rule.percentage_bps
-          return if bps.nil? && rule.variant_weights.empty?
+          return if bps.nil? && rule.weights.empty?
           raise Invalid, "has percentage_bps #{bps.inspect} outside 0..10000" if bps && !(0..Bucket::BUCKETS).cover?(bps)
           return if bps && bucket("rollout", key) >= bps
-          return variants(key) if rule.variant_weights.any?
+          return variants(key) if rule.weights.any?
 
           serve(rule.rollout_value || default_rollout_value, "rollout_value", Reason::SPLIT, "percentage")
         end
@@ -182,7 +197,7 @@ module StandardFlags
         end
 
         def variants(key)
-          weights = rule.variant_weights.to_h { |variant, weight| [ cast(variant, "variant weights"), weight ] }
+          weights = rule.weights.to_h { |variant, weight| [ cast(variant, "variant weights"), weight ] }
           unless weights.values.all?(Integer) && weights.values.all? { |w| w >= 0 } && weights.values.sum == Bucket::BUCKETS
             raise Invalid, "has variant weights that don't sum to #{Bucket::BUCKETS}"
           end

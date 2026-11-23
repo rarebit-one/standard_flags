@@ -1177,6 +1177,102 @@
       }
     },
     {
+      "name": "conditions stored as a list fail the flag",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "platform": "ios",
+          "version": "3.0"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "fallthrough_value": "on",
+          "conditions": [
+            "ios"
+          ]
+        }
+      ],
+      "expected": {
+        "value": false,
+        "variant": "off",
+        "reason": "ERROR",
+        "rule_id": null,
+        "error_code": "PARSE_ERROR"
+      }
+    },
+    {
+      "name": "version ranges stored as a string fail the flag",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "platform": "ios",
+          "version": "3.0"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "fallthrough_value": "on",
+          "conditions": {
+            "platforms": [
+              "ios"
+            ],
+            "versions": "ios >= 2"
+          }
+        }
+      ],
+      "expected": {
+        "value": false,
+        "variant": "off",
+        "reason": "ERROR",
+        "rule_id": null,
+        "error_code": "PARSE_ERROR"
+      }
+    },
+    {
+      "name": "platforms stored as a string fail the flag",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "platform": "ios",
+          "version": "3.0"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "fallthrough_value": "on",
+          "conditions": {
+            "platforms": "ios"
+          }
+        }
+      ],
+      "expected": {
+        "value": false,
+        "variant": "off",
+        "reason": "ERROR",
+        "rule_id": null,
+        "error_code": "PARSE_ERROR"
+      }
+    },
+    {
       "name": "an ENV pin beats the rule",
       "flag": "new_checkout",
       "environment": "production",

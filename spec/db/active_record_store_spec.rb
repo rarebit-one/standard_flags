@@ -152,6 +152,66 @@ RSpec.describe "the ActiveRecord store on Postgres", :db, registry: RuntimeHelpe
     end
   end
 
+  describe "readiness" do
+    it "warns rather than fails when the database can't be reached" do
+      require "standard_health/check"
+      allow(models::Record).to receive(:with_connection).and_raise(ActiveRecord::ConnectionNotEstablished)
+      expect(StandardFlags::Runtime.readiness).to eq("ActiveRecord::ConnectionNotEstablished")
+      expect(StandardFlags::HealthCheck.new.run).to include(status: :ok)
+    end
+
+    it "reads an undefined-table error from the readiness check as missing tables" do
+      undefined = begin
+        begin
+          raise PG::UndefinedTable, "relation does not exist"
+        rescue PG::UndefinedTable
+          raise ActiveRecord::StatementInvalid, "undefined table"
+        end
+      rescue ActiveRecord::StatementInvalid => e
+        e
+      end
+      allow(models::Record).to receive(:with_connection).and_raise(undefined)
+      expect(StandardFlags::Runtime.store.ready?).to be(false)
+      expect(StandardFlags::Runtime.readiness).to be(false)
+    end
+  end
+
+  describe "privacy" do
+    it "adds unit_key to ActiveRecord::Base's filter, so SQL logs never show a unit key" do
+      require "active_record/log_subscriber"
+      checkout = rule!(:new_checkout, member_count: 1)
+      member!(checkout, 5_550_001)
+      bump!
+      StandardFlags.evaluate(:global_banner)
+      expect(ActiveRecord::Base.filter_attributes.map(&:to_s)).to include("unit_key")
+
+      log = StringIO.new
+      previous = ActiveRecord::Base.logger
+      ActiveRecord::Base.logger = ActiveSupport::Logger.new(log).tap { |logger| logger.level = :debug }
+      unit_of_work { expect(StandardFlags.on?(:new_checkout, for: for_account(5_550_001))).to be(true) }
+      expect(log.string).to include("standard_flags_memberships")
+      expect(log.string).not_to include("5550001")
+    ensure
+      ActiveRecord::Base.logger = previous
+    end
+
+    it "adds the filter once, through the engine's boot" do
+      StandardFlags::Runtime.boot!
+      StandardFlags::Runtime.boot!
+      expect(ActiveRecord::Base.filter_attributes.count { |f| f.to_s == "unit_key" }).to eq(1)
+    end
+
+    it "warns when prepared statements are off, since values are then inlined into the SQL" do
+      expect(StandardFlags::Runtime.store.warnings).to eq([])
+      config = ActiveRecord::DatabaseConfigurations::HashConfig.new(
+        "test", "primary", { adapter: "postgresql", prepared_statements: "false" }
+      )
+      allow(models::Record).to receive(:connection_db_config).and_return(config)
+      expect(StandardFlags::Diagnostics.warnings(StandardFlags::Diagnostics.report))
+        .to include(a_string_starting_with("prepared statements are off, so unit keys are inlined"))
+    end
+  end
+
   describe "the schema" do
     it "enforces statuses, percentages and exactly one owner per membership" do
       expect { rule!(:new_checkout, status: "live") }.to raise_error(ActiveRecord::StatementInvalid, /standard_flags_rules_status/)

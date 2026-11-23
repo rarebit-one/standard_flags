@@ -29,7 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first load.
 - **Memberships** read in one query per unit key per unit of work, skipped
   when no rule could match; `StandardFlags.preload(unit, records_or_keys)`
-  reads many in one query.
+  reads many in one query and never raises. A failed lookup is remembered
+  for the unit of work; its flags skip members and cohorts and carry on with
+  reason `ERROR` / `GENERAL`.
+- **One rules snapshot per unit of work**, pinned by the first evaluation,
+  so a request or job never mixes revisions.
 - **Stores.** `StandardFlags::Runtime::ActiveRecordStore` (the default) and
   `MemoryStore` (specs, apps without a database), via `config.runtime_store`.
 - **Registry.** `unit ..., key: ->(actor) { ... }` normalises unit keys
@@ -40,9 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StandardFlags::Testing.rule/members/cohort`), backed by `MemoryStore` and
   reset after each example.
 - **Health and diagnostics.** The health check fails when runtime rules are
-  on and their tables are missing, and warns on a stale snapshot and on rules
-  for undeclared or tombstoned keys. Diagnostics and `flags:list` show each
-  rule's status and the snapshot's revision and age.
+  on and their tables are missing. It warns when the store can't be reached,
+  on a stale snapshot, when prepared statements are off (unit keys would be
+  inlined into SQL text), and on rules for undeclared or tombstoned keys.
+  Diagnostics and `flags:list` show each rule's status and the snapshot's
+  revision and age.
+- **Privacy.** With runtime rules on, `unit_key` is added to
+  `ActiveRecord::Base.filter_attributes` so SQL logs filter it; `Membership`
+  hides it from `inspect` and `pp`; read errors are reported by class only.
 - **standard_health contributions.** On standard_health 0.9+, the gem
   contributes its check (`:standard_flags`, non-critical) to
   `register_default_checks` and declares the pins of `forbidden_in:` flags in

@@ -9,6 +9,13 @@ module StandardFlags
     #
     # There are no associations: every read is one explicit query, which
     # keeps strict_loading and N+1 detectors quiet.
+    #
+    # Unit keys can be phone numbers or emails. A model's filter_attributes
+    # only covers its own `inspect`; ActiveRecord filters SQL log binds
+    # through ActiveRecord::Base's, so loading these models adds `unit_key`
+    # there (Runtime.filter_unit_keys!). That is global, but the name is
+    # narrow. It can't help when prepared statements are off, because the
+    # values are then inlined into the SQL text; the health check warns.
     module Models
       class Record < ::ActiveRecord::Base
         self.abstract_class = true
@@ -24,15 +31,13 @@ module StandardFlags
 
       class Membership < Record
         self.table_name = "standard_flags_memberships"
-        # Unit keys can be phone numbers or emails; keep them out of inspect
-        # output, on top of what the host filters (Rails has copied the
-        # host's filter_parameters onto ActiveRecord::Base by now).
-        self.filter_attributes += [ :unit_key ]
       end
 
       class State < Record
         self.table_name = "standard_flags_state"
       end
     end
+
+    Runtime.filter_unit_keys!(::ActiveRecord::Base)
   end
 end

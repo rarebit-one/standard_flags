@@ -225,7 +225,10 @@ also carry an environment override and client attributes
 Evaluations are memoised per unit of work through the Rails executor, not
 Rack middleware, so requests, jobs, mailers and console reloads all get a
 consistent answer within one unit and a fresh read of ENV in the next.
-Outside an executor run nothing is memoised.
+Outside an executor run nothing is memoised. With runtime rules on, the
+flag's resolved unit key is part of the memo key, so unsaved records (a nil
+`id`) and units whose `key:` reads something other than `id` never share an
+answer.
 
 ## How a value is decided
 
@@ -291,9 +294,9 @@ All four are new, so every index and constraint is created inside
 | `standard_flags_state` | One row; `revision` moves on every change. |
 
 Stored values are strings: `on`/`off` for on/off kinds, a mode value, or a
-variant. The models live in `lib/` (never `app/models`), have no
-associations, and filter `unit_key` from `inspect`, because unit keys can be
-phone numbers or emails.
+variant. The models live in `lib/` (never `app/models`) and have no
+associations. Unit keys can be phone numbers or emails, so they are kept out
+of logs and consoles; see [Privacy](#privacy).
 
 ### How a rule decides
 
@@ -358,6 +361,11 @@ sum, a bad version range) fails only that flag: its `fail:` value with
   accounts.each { |account| notify(account) if StandardFlags.on?(:new_checkout, for: { account: account }) }
   ```
 
+* **One revision per unit of work.** The first evaluation in a request or
+  job pins the rules snapshot, and every later evaluation in that run reuses
+  it, so a page, a client payload or a loop never mixes two revisions.
+  Outside an executor run each evaluation reads the process cache.
+
 The spec suite asserts each of these query counts against Postgres.
 
 ### When the database is unavailable
@@ -367,6 +375,21 @@ error once and emits `runtime_stale.standard_flags`; it tries again one
 interval later. A process that has never loaded rules serves code defaults.
 Inside a host transaction every read runs in a savepoint, so a failed read
 can't abort the host's transaction. The read path never raises.
+
+When a unit's membership lookup fails, the failure is reported once and
+remembered for the rest of the unit of work, so an outage costs one failed
+query per unit per request, not one per flag. Flags that needed it skip the
+direct-member and cohort steps and carry on through segments, the split and
+the fallthrough (or the code default), with reason `ERROR`, error code
+`GENERAL` and the deciding step's `rule_id`. `StandardFlags.preload` never
+raises either: on a store error, or a unit `key:` that raises, it reports
+once (by error class, never a unit key) and returns 0, and each evaluation
+then reads on its own.
+
+A stored row whose shape no rule can have (`conditions` that isn't an
+object, a cohort attachment that isn't an object, and so on) fails only its
+flag, with `PARSE_ERROR` and `rule_invalid.standard_flags`, like an
+unservable value.
 
 ### Without a database
 
@@ -381,6 +404,28 @@ store.add_member(cohort: :staff, unit: :account, unit_key: "42", value: true)
 store.put_rule(:new_checkout, cohorts: { staff: true })
 StandardFlags.configure { |c| c.runtime_rules = true; c.runtime_store = store }
 ```
+
+### Privacy
+
+Unit keys are stored raw, because writes and lookups need the real value.
+The gem keeps them out of the places it controls:
+
+* `Membership` values hide `unit_key` from `inspect`, `to_s` and `pp` (the
+  console's inspector). `to_h` still includes it.
+* When runtime rules are on, the engine adds `unit_key` to
+  `ActiveRecord::Base.filter_attributes`, which is what ActiveRecord's SQL
+  log filters bind values through; a model's own filter doesn't reach the
+  log. The setting is global, so any other model's `unit_key` column is
+  filtered too; the name is deliberately narrow.
+* Membership read errors are reported by error class only, without the
+  driver's message or cause, which can quote the value.
+
+That filter can't help when the connection has **prepared statements off**
+(`prepared_statements: false`, common behind a transaction-mode connection
+pooler): values are then inlined into the SQL text, which reaches SQL logs,
+`sql.active_record` payloads and APM span descriptions as written. The
+health check warns in that case. Either keep prepared statements on for the
+connection, or make sure those sinks scrub SQL text.
 
 ### Migrated flags
 
@@ -632,8 +677,10 @@ end
 The check fails when a `forbidden_in` flag is pinned on, or when runtime
 rules are on and their tables are missing. It warns on unparseable pins,
 legacy names in use, flags past `remove_by`, `STANDARD_FLAGS_*` variables that
-match no flag, a stale runtime snapshot, and runtime rules for undeclared or
-tombstoned keys. standard_health has no
+match no flag, a runtime store that can't be reached (flags keep serving
+through a database blip, so this isn't a failure), a stale runtime snapshot,
+prepared statements being off (see [Privacy](#privacy)), and runtime rules for
+undeclared or tombstoned keys. standard_health has no
 warning status, so warnings ride on the row (`warnings:`) and the check stays
 `:ok`; pass `warn_as: :fail` to let them degrade the tier. It is non-critical
 by default. There is no dependency on standard_health unless you reference
@@ -644,7 +691,8 @@ diagnostics page: each flag's value, reason, deciding variable and whether
 it is permanent, plus
 forbidden, rejected, legacy and unknown pins and stale flags. With runtime
 rules on it adds each flag's `rule_status` and a `runtime:` section (store,
-readiness, revision, snapshot age, staleness and each rule's status), and
+readiness, any unreachable error class, store warnings, revision, snapshot
+age, staleness and each rule's status), and
 `flags:list` gains a `rule` column and a header line with the revision and
 age. It contains variable names only, never raw environment values.
 

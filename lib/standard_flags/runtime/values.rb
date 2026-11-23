@@ -48,21 +48,37 @@ module StandardFlags
         define_method(:"#{name}?") { status == name }
       end
 
+      # The accessors below check the stored shapes that jsonb allows but a
+      # rule can't have, raising Resolver::Invalid so only that flag fails,
+      # with PARSE_ERROR.
+
+      # `[{ "name" => n, "value" => v }, ...]`
       def segments
-        Array(conditions["segments"])
+        list = shaped(condition("segments") || [], Array, "conditions.segments")
+        list.each { |segment| shaped(segment, Hash, "each of conditions.segments") }
       end
 
       def platforms
-        Array(conditions["platforms"]).map { |platform| platform.to_s.downcase }
+        shaped(condition("platforms") || [], Array, "conditions.platforms").map { |platform| platform.to_s.downcase }
       end
 
+      # `{ "android" => ">= 1.4.0" }`
       def versions
-        (conditions["versions"] || {}).to_h { |platform, requirement| [ platform.to_s.downcase, requirement ] }
+        shaped(condition("versions") || {}, Hash, "conditions.versions")
+          .to_h { |platform, requirement| [ platform.to_s.downcase, requirement ] }
+      end
+
+      # `{ variant => weight }`
+      def weights
+        shaped(variant_weights, Hash, "variant_weights")
       end
 
       # `[[cohort_key, value], ...]` in declared order.
       def cohort_attachments
-        cohorts.map { |attachment| [ attachment["cohort"].to_s, attachment["value"] ] }
+        shaped(cohorts, Array, "cohorts").map do |attachment|
+          shaped(attachment, Hash, "each of cohorts")
+          [ attachment["cohort"].to_s, attachment["value"] ]
+        end
       end
 
       def members?
@@ -71,7 +87,19 @@ module StandardFlags
 
       # Whether serving this rule needs the flag's unit key.
       def needs_unit?
-        members? || cohorts.any? || segments.any? || !percentage_bps.nil? || variant_weights.any?
+        members? || cohort_attachments.any? || segments.any? || !percentage_bps.nil? || weights.any?
+      end
+
+      private
+
+      def condition(name)
+        shaped(conditions, Hash, "conditions")[name]
+      end
+
+      def shaped(value, type, field)
+        return value if value.is_a?(type)
+
+        raise Resolver::Invalid, "has a malformed #{field} (expected #{type == Hash ? 'an object' : 'a list'})"
       end
     end
 
@@ -105,6 +133,12 @@ module StandardFlags
         "#<StandardFlags::Runtime::Membership unit=#{unit} rule_id=#{rule_id.inspect} cohort_id=#{cohort_id.inspect}>"
       end
       alias_method :to_s, :inspect
+
+      # pp and IRB's inspector would otherwise print every member. `to_h`
+      # still includes the unit key.
+      def pretty_print(q)
+        q.text(inspect)
+      end
     end
 
     # Everything a store returns from one load.

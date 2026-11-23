@@ -23,7 +23,13 @@ module StandardFlags
     #                                  those keys of one unit, across every
     #                                  rule and cohort, in one read.
     # * ready?                       — whether the tables exist, for the
-    #                                  health check.
+    #                                  health check. Return false when they
+    #                                  are missing; raise when the store
+    #                                  can't be reached, so the check can
+    #                                  tell the two apart.
+    #
+    # Optionally, `warnings` returns strings for the health check (a
+    # configuration that exposes unit keys, say).
     #
     # Implementations: ActiveRecordStore (the default when runtime rules are
     # on) and MemoryStore (specs, and apps without a database).
@@ -42,6 +48,10 @@ module StandardFlags
 
       def ready?
         true
+      end
+
+      def warnings
+        []
       end
     end
   end
