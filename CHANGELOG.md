@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Booting with standard_health 0.9 loaded first.** The standard_health load
+  hook was registered before `StandardFlags.registry` was defined; standard_health
+  0.9 runs its hooks at require time, so the hook fired mid-require and the app
+  failed to boot with `undefined method 'registry'`. The hook is now registered
+  at the end of `standard_flags.rb`.
+
 ## [0.2.0] - 2026-11-23
 
 ### Added
