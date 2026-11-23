@@ -60,10 +60,13 @@ class CreateStandardFlagsTables < ActiveRecord::Migration<%= migration_version %
         name: "index_standard_flags_memberships_live_lookup"
     end
 
-    # A single row. Every write increments revision, and each process reloads
-    # its rules when it sees the revision move.
+    # A single row. Every write sets revision to the next value of its own
+    # sequence (bigserial), and each process reloads its rules when it sees
+    # the revision change. Sequence values are never handed out twice, even
+    # when the write that took one rolls back, so a revision number never
+    # stands for two different sets of rules.
     create_table :standard_flags_state<%= table_options %> do |t|
-      t.bigint :revision, null: false, default: 0
+      t.bigserial :revision, null: false
     end
 
     up_only do

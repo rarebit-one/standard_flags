@@ -11,7 +11,9 @@ module StandardFlags
   module Memo
     KEY = :standard_flags_memo
 
-    # Registered with `app.executor.register_hook`.
+    # Registered with `app.executor.register_hook`. `complete` also runs
+    # the runtime rules' end-of-work step (Runtime.unit_of_work_complete!),
+    # which writes last_evaluated_at when it is due.
     module Hook
       def self.run
         Memo.start!
@@ -20,6 +22,7 @@ module StandardFlags
 
       def self.complete(_state)
         Memo.stop!
+        Runtime.unit_of_work_complete!
       end
     end
 

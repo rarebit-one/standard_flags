@@ -28,6 +28,7 @@ RSpec/DescribeClass:
   Exclude:
     - spec/conformance_spec.rb
     - spec/runtime_conformance_spec.rb
+    - spec/operations_conformance_spec.rb
     - spec/db/**/*
     - spec/integration/**/*
     - spec/standard_flags/notifiers_spec.rb
@@ -36,6 +37,7 @@ RSpec/DescribeClass:
     - spec/standard_flags/error_reporter_spec.rb
     - spec/standard_flags/runtime/diagnostics_spec.rb
     - spec/standard_flags/runtime/hardening_spec.rb
+    - spec/standard_flags/operations/write_path_hardening_spec.rb
     - spec/standard_flags/runtime/query_cost_spec.rb
     - spec/standard_flags/runtime/runtime_off_spec.rb
     - spec/standard_flags/runtime/test_helpers_spec.rb
@@ -45,6 +47,7 @@ RSpec/LeakyLocalVariable:
   Exclude:
     - spec/conformance_spec.rb
     - spec/runtime_conformance_spec.rb
+    - spec/operations_conformance_spec.rb
 
 Style/FrozenStringLiteralComment:
   Enabled: false

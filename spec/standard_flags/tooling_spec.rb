@@ -143,18 +143,12 @@ RSpec.describe StandardFlags::Tooling do
   describe "rake tasks" do
     let(:root) { Pathname(Dir.mktmpdir) }
 
-    before do
-      require "rake"
-      Rake.application = Rake::Application.new
-      Rake::Task.define_task(:environment)
-      load File.expand_path("../../lib/tasks/standard_flags.rake", __dir__)
-      allow(Rails).to receive(:root).and_return(root)
-    end
+    before { allow(Rails).to receive(:root).and_return(root) }
 
     after { FileUtils.rm_rf(root) }
 
     def run_task(name)
-      Rake::Task[name].invoke
+      RakeTasks.invoke(name)
     end
 
     it "lists, reports stale flags and writes the manifest and types" do

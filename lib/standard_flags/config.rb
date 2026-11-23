@@ -51,6 +51,29 @@ module StandardFlags
     # app-defined segment. nil skips segment conditions.
     attr_accessor :segment_resolver
 
+    # The write path's policy hook: `call(actor, scope, key)` is truthy when
+    # `actor` may use `scope` ("flags:read", "flags:write" or "flags:ramp")
+    # on `key` (a flag key Symbol, or "cohort:<key>"). The default allows
+    # StandardFlags::Actor.system actors and nobody else.
+    attr_reader :authorize
+    # `call` returns the actor for an operation called without `actor:`.
+    # Defaults to `Current.user` when the app defines Current with a `user`.
+    attr_reader :actor_resolver
+    # Write-time limits (never checked on read): live members per rule or
+    # cohort, unit keys per operation, cohorts attached to one rule, and the
+    # size of a rule's conditions in bytes of JSON.
+    attr_accessor :max_members, :max_keys_per_operation, :max_cohorts_per_rule, :max_conditions_bytes
+    # Seconds a removed or expired membership is kept (so it can be
+    # restored) before `flags:purge` / StandardFlags::PurgeJob deletes it.
+    attr_accessor :membership_retention
+    # Whether each process records which flags it evaluated, writing
+    # standard_flags_rules.last_evaluated_at for `flags:stale`, and at most
+    # how often (seconds) it writes.
+    attr_accessor :track_evaluations, :evaluation_tracking_interval
+
+    DEFAULT_AUTHORIZE = ->(actor, _scope, _key) { actor.is_a?(Actor) && actor.system? }
+    DEFAULT_ACTOR_RESOLVER = -> { ::Current.user if defined?(::Current) && ::Current.respond_to?(:user) }
+
     attr_writer :strict, :env_source
     attr_reader :extra_notifiers
 
@@ -72,6 +95,15 @@ module StandardFlags
       @runtime_store = nil
       @segment_resolver = nil
       @error_reporter = nil
+      @authorize = DEFAULT_AUTHORIZE
+      @actor_resolver = DEFAULT_ACTOR_RESOLVER
+      @max_members = 10_000
+      @max_keys_per_operation = 1_000
+      @max_cohorts_per_rule = 20
+      @max_conditions_bytes = 64 * 1024
+      @membership_retention = 90 * 86_400
+      @track_evaluations = true
+      @evaluation_tracking_interval = 3_600
       @strict = nil
       @env_source = nil
       @extra_notifiers = []
@@ -90,13 +122,26 @@ module StandardFlags
       @env_source || ENV
     end
 
-    # Adds a subscriber that responds to `call(event_name, payload)` for every
-    # `*.standard_flags` event.
     def error_reporter=(reporter)
       raise ArgumentError, "error_reporter must respond to call(error, context)" unless reporter.nil? || reporter.respond_to?(:call)
 
       @error_reporter = reporter
     end
+
+    def authorize=(policy)
+      raise ArgumentError, "authorize must respond to call(actor, scope, key)" unless policy.respond_to?(:call)
+
+      @authorize = policy
+    end
+
+    def actor_resolver=(resolver)
+      raise ArgumentError, "actor_resolver must respond to call" unless resolver.nil? || resolver.respond_to?(:call)
+
+      @actor_resolver = resolver
+    end
+
+    # Adds a subscriber that responds to `call(event_name, payload)` for every
+    # `*.standard_flags` event.
 
     def add_notifier(notifier)
       raise ArgumentError, "notifier must respond to call(event_name, payload)" unless notifier.respond_to?(:call)

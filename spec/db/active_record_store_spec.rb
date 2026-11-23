@@ -61,6 +61,9 @@ RSpec.describe "the ActiveRecord store on Postgres", :db, registry: RuntimeHelpe
   end
 
   describe "query counts" do
+    # Reads only: the end-of-work last_evaluated_at write has its own specs.
+    before { StandardFlags.config.track_evaluations = false }
+
     it "runs no query per evaluation once rules are cached and no rule has members" do
       rule!(:new_checkout, percentage_bps: 5_000)
       StandardFlags.evaluate(:global_banner)
@@ -107,6 +110,7 @@ RSpec.describe "the ActiveRecord store on Postgres", :db, registry: RuntimeHelpe
     end
 
     it "runs one revision check per interval" do
+      StandardFlags.config.track_evaluations = false # its write has its own specs
       rule!(:new_checkout, fallthrough_value: "on")
       queries = DatabaseHelpers.queries do
         12.times do

@@ -1,3 +1,6 @@
+require "time"
+
+
 module StandardFlags
   module Runtime
     # Immutable, store-independent copies of runtime rows. Stores build them;
@@ -22,7 +25,8 @@ module StandardFlags
     # One flag's runtime rule (a row of standard_flags_rules).
     Rule = Data.define(
       :id, :key, :status, :hash_version, :salt, :percentage_bps, :rollout_value, :variant_weights,
-      :fallthrough_value, :stop_value, :conditions, :cohorts, :member_count, :lock_version, :updated_at
+      :fallthrough_value, :stop_value, :conditions, :cohorts, :member_count, :lock_version, :full_since,
+      :last_evaluated_at, :updated_at
     ) do
       def self.build(**attributes)
         new(
@@ -40,6 +44,8 @@ module StandardFlags
           cohorts: Values.deep_freeze(attributes[:cohorts] || []),
           member_count: attributes.fetch(:member_count, 0).to_i,
           lock_version: attributes.fetch(:lock_version, 0).to_i,
+          full_since: attributes[:full_since],
+          last_evaluated_at: attributes[:last_evaluated_at],
           updated_at: attributes[:updated_at]
         )
       end
@@ -90,6 +96,17 @@ module StandardFlags
         members? || cohort_attachments.any? || segments.any? || !percentage_bps.nil? || weights.any?
       end
 
+      # The rule's state as audit rows and notifications record it: every
+      # setting, never a member.
+      def audit_state
+        {
+          status: status, hash_version: hash_version, salt: salt, percentage_bps: percentage_bps,
+          rollout_value: rollout_value, variant_weights: variant_weights, fallthrough_value: fallthrough_value,
+          stop_value: stop_value, conditions: conditions, cohorts: cohorts, member_count: member_count,
+          lock_version: lock_version, full_since: full_since&.utc&.iso8601
+        }
+      end
+
       private
 
       def condition(name)
@@ -104,12 +121,13 @@ module StandardFlags
     end
 
     # A named, reusable member list (a row of standard_flags_cohorts).
-    Cohort = Data.define(:id, :key, :name, :unit, :member_count, :archived_at) do
+    Cohort = Data.define(:id, :key, :name, :description, :unit, :member_count, :archived_at) do
       def self.build(**attributes)
         new(
           id: attributes[:id],
           key: attributes.fetch(:key).to_s.freeze,
           name: attributes[:name]&.to_s&.freeze,
+          description: attributes[:description]&.to_s&.freeze,
           unit: attributes.fetch(:unit).to_sym,
           member_count: attributes.fetch(:member_count, 0).to_i,
           archived_at: attributes[:archived_at]
@@ -118,6 +136,12 @@ module StandardFlags
 
       def archived?
         !archived_at.nil?
+      end
+
+      # The cohort as audit rows and notifications record it, without members.
+      def audit_state
+        { key: key, name: name, description: description, unit: unit.to_s, member_count: member_count,
+          archived_at: archived_at&.utc&.iso8601 }
       end
     end
 

@@ -3,6 +3,9 @@ require "active_support/core_ext/object/blank"
 
 require "standard_flags/version"
 require "standard_flags/errors"
+require "standard_flags/result"
+require "standard_flags/actor"
+require "standard_flags/events"
 require "standard_flags/reason"
 require "standard_flags/evaluation"
 require "standard_flags/mode"
@@ -28,6 +31,7 @@ require "standard_flags/notifiers/sentry"
 require "standard_flags/notifiers/metrics"
 require "standard_flags/subscribers"
 require "standard_flags/diagnostics"
+require "standard_flags/operations"
 require "standard_flags/tooling"
 require "standard_flags/health_contribution"
 require "standard_flags/engine" if defined?(::Rails::Engine)
@@ -37,10 +41,11 @@ require "standard_flags/engine" if defined?(::Rails::Engine)
 ActiveSupport.on_load(:standard_health, &StandardFlags::HealthContribution::HOOK)
 
 module StandardFlags
-  # Loaded on first reference: they need actionpack, activejob and
-  # standard_health respectively, which the host brings.
+  # Loaded on first reference: they need actionpack, activejob (Job and
+  # PurgeJob) and standard_health respectively, which the host brings.
   autoload :Controller, "standard_flags/controller"
   autoload :Job, "standard_flags/job"
+  autoload :PurgeJob, "standard_flags/purge_job"
   autoload :HealthCheck, "standard_flags/health_check"
 
   class << self

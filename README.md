@@ -264,9 +264,9 @@ stored in the app's own database (Postgres). They are off by default: with
 `config.runtime_rules` false, nothing reads a database, ActiveRecord is never
 loaded by the gem, and every flag behaves exactly as in 0.1.0.
 
-This release has the read path. Rules are written through audited
-operations in the next release; until then they can be written directly to
-the tables, or held in a `MemoryStore`.
+Rules change only through audited operations (see
+[Changing flags](#changing-flags)), from the console, a rake task, or the
+app's own admin and tools.
 
 ### Turning them on
 
@@ -295,7 +295,7 @@ All four are new, so every index and constraint is created inside
 | `standard_flags_rules` | One row per flag: `status` (draft, running, paused, stopped), `hash_version` and `salt`, `percentage_bps` (0–10,000), `rollout_value`, `variant_weights`, `fallthrough_value`, `stop_value`, `conditions` (platforms, version ranges, segments), attached `cohorts`, `member_count`. |
 | `standard_flags_cohorts` | Named, reusable member lists of one unit, such as staff accounts. |
 | `standard_flags_memberships` | A unit key in exactly one rule or cohort, with the value it serves and an optional `expires_at`. Removed rows keep `removed_at`. |
-| `standard_flags_state` | One row; `revision` moves on every change. |
+| `standard_flags_state` | One row; `revision` moves on every change, to the next value of its own sequence, so a number taken by a write that rolled back is never reused. A database built from `schema.rb` or `structure.sql` has the table but not the row (the migration inserts it); the first change creates it, until then every revision check reloads the rules, and the health check warns. |
 
 Stored values are strings: `on`/`off` for on/off kinds, a mode value, or a
 variant. The models live in `lib/` (never `app/models`) and have no
@@ -423,6 +423,8 @@ The gem keeps them out of the places it controls:
   filtered too; the name is deliberately narrow.
 * Membership read errors are reported by error class only, without the
   driver's message or cause, which can quote the value.
+* Memberships are inserted with every value bound, never written into the
+  SQL text, and lookups, updates and purge bind unit keys too.
 
 That filter can't help when the connection has **prepared statements off**
 (`prepared_statements: false`, common behind a transaction-mode connection
@@ -436,6 +438,223 @@ connection, or make sure those sinks scrub SQL text.
 A flag moved from another system declares `bucketing: { version: 1, salt:
 "old_key" }` so its units keep their buckets; the rule copies those values
 when it is first written, and its salt never changes afterwards.
+
+## Changing flags
+
+Every change to a rule, cohort or membership goes through an operation in
+`StandardFlags::Operations`. Each one is called as
+`.call(key_or_cohort, actor:, reason:, expected_revision: nil, **args)` and
+returns a `StandardFlags::Result` (`success?`, `value`, `errors`, plus a
+`code` Symbol on failure). It never raises for a refusal.
+
+```ruby
+ops = StandardFlags::Operations
+ops::Ramp.call(:new_checkout, bps: 500, actor: current_user, reason: "5% canary")
+ops::SetValue.call(:strict_gates, value: :sensor, actor: current_user, reason: "observe before enforcing")
+ops::SetValue.call(:ai_assistant, value: false, actor: current_user, reason: "provider outage")  # kill switch
+ops::Start.call(:new_checkout, actor: current_user, reason: "go")
+
+ops::CreateCohort.call("staff", unit: :account, name: "Staff", actor: current_user, reason: "dogfood")
+ops::AddMembers.call("cohort:staff", keys: staff_accounts, actor: current_user, reason: "dogfood")
+ops::AttachCohort.call(:new_checkout, cohort: "staff", value: true, actor: current_user, reason: "dogfood")
+
+result = ops::Pause.call(:new_checkout, actor: current_user, reason: "error spike", expected_revision: 7)
+result.code  # => :stale_revision if someone changed the rule since you read revision 7
+```
+
+A successful Result's `value` has the key (or `cohort:`), the state after
+the change (`rule:` or `state:`), `revision:` and `store_revision:`, plus
+what the operation changed. `revision` is the number `expected_revision` is
+checked against, so it can be passed straight back: a rule's `lock_version`,
+or for cohort operations the store's revision. `store_revision` is always
+`standard_flags_state.revision`.
+
+| Operation | Scope | Does |
+|-----------|-------|------|
+| `Start` | `flags:write` | Draft or paused → running, after checking everything the rule would serve. |
+| `Pause` | `flags:write` | Running → paused. A paused rule serves the code default and keeps its settings, so `Start` resumes it. |
+| `Stop(serve:)` | `flags:write` | → stopped, serving `serve:` to everyone (the winner, or the flag's `final:`) until the code drops the flag. |
+| `Ramp(bps:, value: nil)` | `flags:ramp` | Sets the percentage (0–10,000 basis points) and, for modes and experiments, the value it serves. At 10,000 it records `full_since`. |
+| `SetVariants(weights:)` | `flags:ramp` | Weights over the flag's variants or mode values, summing to 10,000. `{}` clears them. |
+| `SetValue(value:)` | `flags:write` | The fallthrough value, served to every unit nothing else matched. Moves a mode off → sensor → on and throws a kill switch. `nil` clears it. |
+| `SetConditions(platforms:, versions:, segments:)` | `flags:write` | Replaces the conditions; omitted ones are cleared. |
+| `AddMembers(keys:, value:, unit:, expires_at:)` | `flags:write` | Adds units (records or keys) to a rule or a cohort; adding an existing member updates its value and expiry. |
+| `RemoveMembers(keys:, unit:)` | `flags:write` | Removes them (soft delete, see retention below). |
+| `CreateCohort(unit:, name:, description:)` / `ArchiveCohort` | `flags:write` | Named member lists of one unit. Archiving needs the cohort detached everywhere. |
+| `AttachCohort(cohort:, value:)` / `DetachCohort(cohort:)` | `flags:write` | Attach a cohort to a flag, serving `value:` to its members. |
+
+A target is a flag key, or a cohort as `"cohort:staff"` (or
+`StandardFlags::Operations.cohort(:staff)`). Values are Ruby values or their
+stored strings (`true` or `"on"`, `:sensor` or `"sensor"`). Member keys go
+through the unit's `key:`, so records, raw keys and unnormalised phone
+numbers all work.
+
+### What every operation does
+
+1. **Actor.** `actor:`, else `config.actor_resolver` (by default `Current.user`
+   when the app defines `Current`). With neither, it fails
+   (`:actor_missing`). Work no person does passes
+   `StandardFlags::Actor.system("name")`.
+2. **Policy.** `config.authorize = ->(actor, scope, key) { ... }` must return
+   truthy. Scopes are `flags:read`, `flags:write` and `flags:ramp` (ramping
+   is granted separately, so on-call can ramp without changing targeting).
+   The key is the flag key Symbol, or `"cohort:<key>"`; `AttachCohort` and
+   `DetachCohort` ask about both the flag and the cohort. The default allows
+   system actors and nobody else, so wire it to your policy layer:
+   ```ruby
+   config.authorize = lambda do |actor, scope, _key|
+     next true if actor.is_a?(StandardFlags::Actor) # rake tasks
+     scope == "flags:ramp" ? actor.on_call? || actor.admin? : actor.admin?
+   end
+   ```
+3. **Refusals.** Unknown (`:unknown_flag`) and tombstoned (`:tombstoned_flag`)
+   keys, and flags an ENV pin decides (`:pinned_by_env`; the message names
+   the variable, never its value). An ENV pin always beats the database, so
+   writing under one would change nothing anyone sees.
+4. **One transaction.** The rule is created on first use (salt and hash
+   version from `bucketing:`, else a random salt and v2) and locked `FOR
+   UPDATE`, then the cohorts it needs, by id; `expected_revision` is checked
+   against its `lock_version` (`:stale_revision`; for cohort operations,
+   against the store's revision); the change is validated and saved. A rule
+   that is running afterwards is checked whole, as `Start` checks it, so no
+   edit can leave one the read path would refuse. Then
+   `standard_flags_state.revision` moves on. Inside the app's own
+   transaction it runs in a savepoint and commits with it.
+5. **Audit**, in the same transaction, in its own savepoint (below).
+6. **After the commit**, never while the write's locks are held: the
+   process cache is expired (so this process sees the change at once), the
+   unit of work's memo is cleared, and the events go out. Inside the app's
+   transaction that happens when it commits, and not at all if it rolls
+   back.
+
+Locks are always taken in one order: the rule or cohort being changed, then
+cohorts by id, then memberships, then the state row; purge locks the rules
+and cohorts it recounts first. So two operations, or an operation and purge,
+never wait on each other.
+
+Failures carry a `code`: `:actor_missing`, `:unauthorized`, `:invalid`,
+`:limit_exceeded`, `:unknown_flag`, `:tombstoned_flag`, `:pinned_by_env`,
+`:stale_revision`, `:already_exists` (`CreateCohort` on a taken key),
+`:runtime_rules_off`, `:audit_failed`, `:store_error` (reported) or `:error`
+(unexpected, reported). A success means the change committed (or, inside the
+app's transaction, commits with it): a write whose transaction a swallowed
+error aborted fails with `:store_error` instead of reporting a change that
+Postgres silently rolled back.
+
+### Validation and limits
+
+Everything is checked on write and nothing on read (R13): values must be
+ones the flag can take, weights must use its variants or mode values and sum
+to 10,000, `bps` must be 0–10,000, percentages, variants, segments and
+members need the flag to declare a `unit:`, version ranges must parse, and a
+cohort's unit must match the flag's. Limits, each configurable:
+
+```ruby
+config.max_members = 10_000            # live members per rule or cohort
+config.max_keys_per_operation = 1_000
+config.max_cohorts_per_rule = 20
+config.max_conditions_bytes = 64 * 1024
+```
+
+### Audit
+
+Every operation records the actor, the reason and the full rule (or cohort)
+state before and after, without members, and publishes one event:
+
+| Event | Operation |
+|-------|-----------|
+| `standard_flags.flag.started` / `.paused` / `.stopped` | Start, Pause, Stop |
+| `standard_flags.flag.ramped` / `.variants_set` / `.value_set` / `.conditions_set` | Ramp, SetVariants, SetValue, SetConditions |
+| `standard_flags.flag.members_added` / `.members_removed` | AddMembers, RemoveMembers on a rule |
+| `standard_flags.cohort.created` / `.archived` / `.attached` / `.detached` | the cohort operations |
+| `standard_flags.cohort.members_added` / `.members_removed` | AddMembers, RemoveMembers on a cohort |
+
+The payload has `actor` (the record, or nil for a system actor),
+`actor_label`, `reason`, `key` or `cohort`, `revision` and `store_revision`
+(as in the Result), `before` and `after`.
+Membership changes add `unit`, `value` and counts (`requested`, `added`,
+`updated`, `removed`). **Unit keys never appear** in an audit row, a
+notification, a Result or an error report: they can be phone numbers or
+emails.
+
+With [standard_audit](https://github.com/rarebit-one/standard_audit) loaded,
+each change writes one audit row inside the operation's transaction, in its
+own savepoint. Either subscribe standard_audit to the events:
+
+```ruby
+StandardAudit.configure do |config|
+  StandardFlags::Events.auditable.each { |pattern| config.subscribe_to(pattern) }
+end
+```
+
+or don't, and the gem writes the row itself through
+`StandardAudit::Operation#audit!` (as `StandardFlags::Operations::AuditWriter`).
+It checks which: there is one row either way. If your app keeps an
+`AuditCatalogue::ACTIONS`, add `StandardFlags::Events.auditable` to it, or
+standard_audit's declaration check fails in development and test.
+
+standard_audit swallows a failed write by default, and on Postgres a failed
+statement aborts the whole transaction; the savepoint confines the failure
+to the audit row. With `raise_on_audit_write_error`, a failed audit write
+fails the operation (`:audit_failed`) and rolls it back, on either path.
+Without it the change commits without its row and the gem reports the loss,
+as standard_audit's default does. (A failure standard_audit's subscriber
+swallows before it reaches the database can't be seen from outside; it
+reports those itself.)
+
+When standard_audit's subscriber writes the row, the event is published
+inside the transaction, so any other subscriber to it runs there too. In
+every other case the events are published after the commit. Without
+standard_audit, operations only publish the events. `change.standard_flags`
+carries a one-line summary for the gem's own subscribers (the Logger line
+and `config.add_notifier`), always after the commit.
+
+### Rake tasks for break-glass changes
+
+For a console with no admin UI. Each task needs `REASON=` (written to the
+audit log), runs as `StandardFlags::Actor.system("rake")`, prints the outcome
+and the new revision, and refuses pinned flags with the variable's name.
+
+```bash
+bin/rails flags:show KEY=new_checkout                 # declaration, value, pin, stored rule
+bin/rails flags:show KEY=cohort:staff
+bin/rails flags:set KEY=strict_gates VALUE=sensor REASON="observe first"
+bin/rails flags:ramp KEY=new_checkout BPS=500 REASON="5% canary"
+bin/rails flags:start KEY=new_checkout REASON="go"
+bin/rails flags:pause KEY=new_checkout REASON="error spike"
+bin/rails flags:stop KEY=new_checkout SERVE=on REASON="winner"
+bin/rails flags:members:add KEY=new_checkout KEYS=42,43 VALUE=on [EXPIRES_AT=2026-12-01T00:00:00Z] REASON="pilot"
+bin/rails flags:members:remove KEY=cohort:staff KEYS=42 REASON="left"
+bin/rails flags:purge REASON="weekly"
+```
+
+The default `config.authorize` allows system actors; if you replace it, keep
+allowing them or the rake tasks are refused too.
+
+### Retention
+
+`RemoveMembers` keeps the row with `removed_at`, so a change can be undone
+from the audit trail. `bin/rails flags:purge` (or `StandardFlags::PurgeJob`,
+an ActiveJob, defined when the app loads ActiveJob) hard-deletes memberships
+removed or expired more than `config.membership_retention` ago (default 90
+days). Schedule the job, for example daily.
+
+### Stale rules
+
+`flags:stale` also lists rules at 100% or stopped for 30 days or more, rules
+not evaluated in 14 days, rules for undeclared or tombstoned keys, and
+memberships past retention. "Not evaluated" comes from `last_evaluated_at`:
+each process notes in memory which flags it evaluated. Nothing is written
+during an evaluation. When a unit of work ends (the Rails executor's
+`complete` hook, after the request or job has done its work), the gem writes
+the noted flags if it hasn't in the last `config.evaluation_tracking_interval`
+(default an hour), so at most once per interval per process, in one
+`UPDATE`. That `UPDATE` never waits: it skips rows a write holds (`FOR
+UPDATE SKIP LOCKED`), it is skipped inside an open transaction, and it
+changes neither `lock_version` nor `updated_at`. A process that evaluates
+flags outside the executor never writes them. A failed write is reported
+once and retried, and `config.track_evaluations = false` turns it off (and
+the 14-day check with it).
 
 ## Environment variables
 
@@ -652,7 +871,9 @@ end
 | Task | What it does |
 |------|--------------|
 | `bin/rails flags:list` | Every flag with its value, reason, deciding env var and remove_by (`permanent` for permanent flags). |
-| `bin/rails flags:stale` | Flags and modes past `remove_by`, with the `final:` value to keep. Permanent ones never appear. |
+| `bin/rails flags:stale` | Flags and modes past `remove_by`, with the `final:` value to keep. Permanent ones never appear. With runtime rules on, also stale rules and memberships due for purge ([Stale rules](#stale-rules)). |
+| `bin/rails flags:show KEY=` | One flag's declaration, value here, ENV pin and stored rule; `KEY=cohort:<key>` for a cohort. |
+| `bin/rails flags:set` / `ramp` / `start` / `pause` / `stop` / `members:add` / `members:remove` / `purge` | Break-glass changes through the audited operations ([Rake tasks for break-glass changes](#rake-tasks-for-break-glass-changes)). |
 | `bin/rails flags:refs` | Scans `config.refs_paths` (default `app lib config`) for `on?(:k`, `off?(:k`, `mode(:k`, `variant(:k`, `evaluate(:k`, `requires_flag :k` and string keys. Exits non-zero for undeclared or tombstoned keys; warns for declared flags nothing reads. Run it in CI. |
 | `bin/rails standard_flags:manifest` | Writes `config/flags.manifest.json`: keys, wire names, kinds, values, audiences and defaults (and `permanent` on entries of kind `flag` and `mode`), deterministically. Commit it. |
 | `bin/rails standard_flags:typescript` | Writes a `.d.ts` with a `Features` interface per audience (`WebFeatures`, `MobileFeatures`, …) keyed by wire name. |
@@ -672,6 +893,9 @@ end
 | `runtime_stale.standard_flags` | A runtime refresh failed; the last good rules (or code defaults) keep serving. |
 | `rule_invalid.standard_flags` | A stored rule holds something its flag can't serve. |
 | `targeting_key_missing.standard_flags` | A rule needs a unit key the context doesn't have. |
+| `change.standard_flags` | An operation's change committed (event, key or cohort, actor label, revision, store revision). The full events are `standard_flags.flag.*` and `standard_flags.cohort.*` ([Audit](#audit)). |
+| `purge.standard_flags` | Memberships purged (counts). |
+| `evaluation_tracking_failed.standard_flags` | Writing `last_evaluated_at` failed; it is retried. |
 
 Built-in subscribers: **Logger** (always), **Metrics** (`Sentry::Metrics`
 counters when sentry-ruby is loaded) and **Sentry** (handled warnings for
@@ -719,7 +943,8 @@ rules are on and their tables are missing. It warns on unparseable pins,
 legacy names in use, flags past `remove_by`, `STANDARD_FLAGS_*` variables that
 match no flag, a runtime store that can't be reached (flags keep serving
 through a database blip, so this isn't a failure), a stale runtime snapshot,
-prepared statements being off (see [Privacy](#privacy)), and runtime rules for
+prepared statements being off (see [Privacy](#privacy)), a missing
+`standard_flags_state` row, and runtime rules for
 undeclared or tombstoned keys. standard_health has no
 warning status, so warnings ride on the row (`warnings:`) and the check stays
 `:ok`; pass `warn_as: :fail` to let them degrade the tier. It is non-critical
@@ -850,8 +1075,8 @@ every vector.
 Phase 2 adds runtime rules stored in the database (changes without a
 redeploy, allow and deny lists, cohorts, sticky percentage rollouts with
 per-flag salts), audited write operations and an admin generator. The read
-path is on `main`; the write operations and rake tasks come next, then MCP
-tools, the admin generator and an OpenFeature provider. Phase 3
+path, the operations and the rake tasks are done; MCP tools, the admin
+generator, `flags:restore` and an OpenFeature provider come next. Phase 3
 adds client delivery: an OpenFeature remote-evaluation (OFREP) endpoint,
 client version targeting, a minimum-version endpoint and the manifest
 contract checked in client CI. Phase 4 adds experiment exposure tracking and

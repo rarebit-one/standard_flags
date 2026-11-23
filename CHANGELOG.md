@@ -64,6 +64,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Conformance** fixtures for runtime rules
   (`spec/fixtures/conformance/runtime/`), and a Postgres CI job that runs the
   database specs, including `Bucket.v2` against `Bucket.sql_v2`.
+- **Write path.** `StandardFlags::Operations`: `Start`, `Pause`, `Stop`,
+  `Ramp`, `SetVariants`, `SetValue`, `SetConditions`, `AddMembers`,
+  `RemoveMembers`, `CreateCohort`, `ArchiveCohort`, `AttachCohort` and
+  `DetachCohort`, each called as
+  `.call(key_or_cohort, actor:, reason:, expected_revision: nil, **args)` and
+  returning a `StandardFlags::Result` (`success?`, `value`, `errors`, `code`).
+  Each authorises through `config.authorize` (scopes `flags:read`,
+  `flags:write`, `flags:ramp`; the default allows only
+  `StandardFlags::Actor.system` actors), refuses unknown, tombstoned and
+  ENV-pinned flags (`:pinned_by_env`, naming the variable), and writes in one
+  transaction: the rule is created on first use (salt and hash version from
+  `bucketing:`, else random and v2) and locked, `expected_revision` is
+  checked against its `lock_version`, the change is validated (a rule left
+  running is checked whole, as `Start` checks it), and the state revision
+  moves on. Results carry `revision` (what `expected_revision` is checked
+  against: a rule's `lock_version`, the store's revision for cohorts) and
+  `store_revision`. A success means the write committed: a transaction that
+  a swallowed error aborted fails with `:store_error`. Locks are taken in one
+  order (owner, cohorts by id, memberships, state row). `CreateCohort` on a
+  taken key, even a concurrent one, fails with `:already_exists`.
+  `AttachCohort` and `DetachCohort` authorise the cohort as well as the flag.
+  `config.actor_resolver` defaults to `Current.user`.
+- **Validation on write**, with configurable limits: `max_members` (10,000
+  live members per rule or cohort), `max_keys_per_operation` (1,000),
+  `max_cohorts_per_rule` (20) and `max_conditions_bytes` (64 KB).
+- **Audit.** Every operation records the actor, the reason and the full rule
+  or cohort state before and after, and publishes
+  `standard_flags.flag.*` / `standard_flags.cohort.*`
+  (`StandardFlags::Events.auditable`) plus `change.standard_flags`. With
+  standard_audit loaded, one audit row per change, in a savepoint inside the
+  write, through its subscriber when the app subscribes to the events, else
+  through `StandardAudit::Operation#audit!`; `raise_on_audit_write_error`
+  fails the operation on either path. Everything else (the events when
+  standard_audit doesn't need them in the transaction,
+  `change.standard_flags`, notifiers, cache expiry) runs after the commit.
+  Membership changes record the unit, the value and counts, never a unit
+  key, and memberships are inserted with bound values, never inlined SQL.
+- **Soft-deleted memberships and purge.** `RemoveMembers` sets `removed_at`;
+  `flags:purge` and `StandardFlags::PurgeJob` delete removed and expired
+  memberships older than `config.membership_retention` (90 days), locking
+  the rules and cohorts it recounts first.
+- **Rake tasks** `flags:show`, `flags:set`, `flags:ramp`, `flags:start`,
+  `flags:pause`, `flags:stop`, `flags:members:add`, `flags:members:remove`
+  and `flags:purge`, each with a required `REASON=`, run as the system actor.
+- **`last_evaluated_at` write-behind.** Each process records the flags it
+  evaluates and writes them when a unit of work ends (the executor's
+  `complete` hook), at most once per `config.evaluation_tracking_interval`
+  (an hour) per process, in one `UPDATE` that skips locked rows and leaves
+  `lock_version` and `updated_at` alone. Never during an evaluation or
+  inside an open transaction; `config.track_evaluations = false` turns it
+  off.
+- **`flags:stale`** also lists rules at 100% or stopped for 30 days, rules
+  not evaluated in 14 days, rules for undeclared or tombstoned keys, and
+  memberships due for purge.
+- **Revisions never repeat.** `standard_flags_state.revision` is a
+  `bigserial`, and every write sets it to the sequence's next value
+  (`StandardFlags::Runtime.bump_revision!`), so a revision taken by a write
+  that rolled back is never committed again for different rules; a process
+  that loaded the rolled-back rules reloads at its next check. A missing
+  state row (a database built from `schema.rb`) is created by the next
+  write; until then the revision reads as none, every check reloads, and the
+  health check warns.
+- **Conformance** fixtures for the write path
+  (`spec/fixtures/conformance/operations/`).
 - **`legacy_parser: :exact`** (with `legacy_true:`, default `%w[on]`) reads
   legacy `env:` names the way an exact `ENV["X"] == "on"` reader did: on/off
   kinds are on only for a `legacy_true:` value and pinned off by any other

@@ -1,0 +1,578 @@
+{
+  "description": "The write path: operations applied in order to an empty store, then evaluations. Each step names an operation (snake_case: ramp, set_value, add_members, ...), its target (a flag key, or cohort:<key>), its arguments as stored strings, an optional expected_revision, and the failure code it must return when it is refused (\"fails\"). Steps run as a system actor that the policy allows. Rules created by a step take the flag's bucketing:, so bucket numbers in case names are the v2 rollout bucket (see bucket_vectors.json).",
+  "registry": {
+    "units": [
+      "account"
+    ],
+    "flags": [
+      {
+        "kind": "flag",
+        "key": "new_checkout",
+        "owner": "payments",
+        "remove_by": "2027-01-01",
+        "final": true,
+        "unit": "account",
+        "bucketing": {
+          "version": 2,
+          "salt": "conformance"
+        }
+      },
+      {
+        "kind": "flag",
+        "key": "global_banner",
+        "owner": "web",
+        "remove_by": "2027-01-01",
+        "final": true
+      },
+      {
+        "kind": "kill_switch",
+        "key": "ai_assistant",
+        "owner": "assistant",
+        "unit": "account"
+      },
+      {
+        "kind": "mode",
+        "key": "strict_gates",
+        "owner": "platform",
+        "preset": "sensor",
+        "unit": "account"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "a draft rule serves the code default until it starts",
+      "steps": [
+        {
+          "op": "set_value",
+          "target": "global_banner",
+          "args": {
+            "value": "on"
+          }
+        }
+      ],
+      "checks": [
+        {
+          "flag": "global_banner",
+          "environment": "production",
+          "context": {},
+          "expected": {
+            "value": false,
+            "variant": "off",
+            "reason": "DEFAULT",
+            "rule_id": null,
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "a started rule serves its fallthrough value",
+      "steps": [
+        {
+          "op": "set_value",
+          "target": "global_banner",
+          "args": {
+            "value": "on"
+          }
+        },
+        {
+          "op": "start",
+          "target": "global_banner"
+        }
+      ],
+      "checks": [
+        {
+          "flag": "global_banner",
+          "environment": "production",
+          "context": {},
+          "expected": {
+            "value": true,
+            "variant": "on",
+            "reason": "TARGETING_MATCH",
+            "rule_id": "fallthrough",
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "a ramp serves units below the percentage (acct_8 is bucket 2290, acct_1 is 8584)",
+      "steps": [
+        {
+          "op": "ramp",
+          "target": "new_checkout",
+          "args": {
+            "bps": 2500
+          }
+        },
+        {
+          "op": "start",
+          "target": "new_checkout"
+        }
+      ],
+      "checks": [
+        {
+          "flag": "new_checkout",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_8"
+            }
+          },
+          "expected": {
+            "value": true,
+            "variant": "on",
+            "reason": "SPLIT",
+            "rule_id": "percentage",
+            "error_code": null
+          }
+        },
+        {
+          "flag": "new_checkout",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_1"
+            }
+          },
+          "expected": {
+            "value": false,
+            "variant": "off",
+            "reason": "DEFAULT",
+            "rule_id": null,
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "pausing serves the code default and keeps the settings for start",
+      "steps": [
+        {
+          "op": "set_value",
+          "target": "strict_gates",
+          "args": {
+            "value": "on"
+          }
+        },
+        {
+          "op": "start",
+          "target": "strict_gates"
+        },
+        {
+          "op": "pause",
+          "target": "strict_gates"
+        }
+      ],
+      "checks": [
+        {
+          "flag": "strict_gates",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_1"
+            }
+          },
+          "expected": {
+            "value": "off",
+            "variant": "off",
+            "reason": "DEFAULT",
+            "rule_id": null,
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "start resumes a paused rule as it was",
+      "steps": [
+        {
+          "op": "set_value",
+          "target": "strict_gates",
+          "args": {
+            "value": "sensor"
+          }
+        },
+        {
+          "op": "start",
+          "target": "strict_gates"
+        },
+        {
+          "op": "pause",
+          "target": "strict_gates"
+        },
+        {
+          "op": "start",
+          "target": "strict_gates"
+        }
+      ],
+      "checks": [
+        {
+          "flag": "strict_gates",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_1"
+            }
+          },
+          "expected": {
+            "value": "sensor",
+            "variant": "sensor",
+            "reason": "TARGETING_MATCH",
+            "rule_id": "fallthrough",
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_value throws a kill switch from the database",
+      "steps": [
+        {
+          "op": "set_value",
+          "target": "ai_assistant",
+          "args": {
+            "value": "off"
+          }
+        },
+        {
+          "op": "start",
+          "target": "ai_assistant"
+        }
+      ],
+      "checks": [
+        {
+          "flag": "ai_assistant",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_1"
+            }
+          },
+          "expected": {
+            "value": false,
+            "variant": "off",
+            "reason": "KILL_SWITCH",
+            "rule_id": "fallthrough",
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "a member's value wins over the fallthrough, and deny wins over a cohort",
+      "steps": [
+        {
+          "op": "create_cohort",
+          "target": "cohort:staff",
+          "args": {
+            "unit": "account"
+          }
+        },
+        {
+          "op": "add_members",
+          "target": "cohort:staff",
+          "args": {
+            "keys": [
+              "acct_1",
+              "acct_2"
+            ]
+          }
+        },
+        {
+          "op": "attach_cohort",
+          "target": "strict_gates",
+          "args": {
+            "cohort": "staff",
+            "value": "on"
+          }
+        },
+        {
+          "op": "add_members",
+          "target": "strict_gates",
+          "args": {
+            "keys": [
+              "acct_2"
+            ],
+            "value": "off"
+          }
+        },
+        {
+          "op": "set_value",
+          "target": "strict_gates",
+          "args": {
+            "value": "sensor"
+          }
+        },
+        {
+          "op": "start",
+          "target": "strict_gates"
+        }
+      ],
+      "checks": [
+        {
+          "flag": "strict_gates",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_1"
+            }
+          },
+          "expected": {
+            "value": "on",
+            "variant": "on",
+            "reason": "TARGETING_MATCH",
+            "rule_id": "cohort:staff",
+            "error_code": null
+          }
+        },
+        {
+          "flag": "strict_gates",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_2"
+            }
+          },
+          "expected": {
+            "value": "off",
+            "variant": "off",
+            "reason": "TARGETING_MATCH",
+            "rule_id": "deny",
+            "error_code": null
+          }
+        },
+        {
+          "flag": "strict_gates",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_3"
+            }
+          },
+          "expected": {
+            "value": "sensor",
+            "variant": "sensor",
+            "reason": "TARGETING_MATCH",
+            "rule_id": "fallthrough",
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "a removed member no longer matches",
+      "steps": [
+        {
+          "op": "add_members",
+          "target": "new_checkout",
+          "args": {
+            "keys": [
+              "acct_1"
+            ]
+          }
+        },
+        {
+          "op": "start",
+          "target": "new_checkout"
+        },
+        {
+          "op": "remove_members",
+          "target": "new_checkout",
+          "args": {
+            "keys": [
+              "acct_1"
+            ]
+          }
+        }
+      ],
+      "checks": [
+        {
+          "flag": "new_checkout",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_1"
+            }
+          },
+          "expected": {
+            "value": false,
+            "variant": "off",
+            "reason": "DEFAULT",
+            "rule_id": null,
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "a stopped rule serves its stop value to everyone",
+      "steps": [
+        {
+          "op": "add_members",
+          "target": "new_checkout",
+          "args": {
+            "keys": [
+              "acct_1"
+            ],
+            "value": "off"
+          }
+        },
+        {
+          "op": "stop",
+          "target": "new_checkout",
+          "args": {
+            "serve": "on"
+          }
+        }
+      ],
+      "checks": [
+        {
+          "flag": "new_checkout",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_1"
+            }
+          },
+          "expected": {
+            "value": true,
+            "variant": "on",
+            "reason": "STATIC",
+            "rule_id": "stopped",
+            "error_code": null
+          }
+        },
+        {
+          "flag": "new_checkout",
+          "environment": "production",
+          "context": {},
+          "expected": {
+            "value": true,
+            "variant": "on",
+            "reason": "STATIC",
+            "rule_id": "stopped",
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "expected_revision is the rule's revision: a stale one is refused, the current one applies",
+      "steps": [
+        {
+          "op": "set_value",
+          "target": "global_banner",
+          "args": {
+            "value": "on"
+          }
+        },
+        {
+          "op": "start",
+          "target": "global_banner",
+          "expected_revision": 0,
+          "fails": "stale_revision"
+        },
+        {
+          "op": "start",
+          "target": "global_banner",
+          "expected_revision": 1
+        }
+      ],
+      "checks": [
+        {
+          "flag": "global_banner",
+          "environment": "production",
+          "context": {},
+          "expected": {
+            "value": true,
+            "variant": "on",
+            "reason": "TARGETING_MATCH",
+            "rule_id": "fallthrough",
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "a pinned flag is refused and the pin still decides",
+      "env_vars": {
+        "STANDARD_FLAGS_GLOBAL_BANNER": "true"
+      },
+      "steps": [
+        {
+          "op": "set_value",
+          "target": "global_banner",
+          "args": {
+            "value": "off"
+          },
+          "fails": "pinned_by_env"
+        }
+      ],
+      "checks": [
+        {
+          "flag": "global_banner",
+          "environment": "production",
+          "context": {},
+          "expected": {
+            "value": true,
+            "variant": "on",
+            "reason": "ENV_PIN",
+            "rule_id": null,
+            "error_code": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "a value the flag can't take is refused on write",
+      "steps": [
+        {
+          "op": "set_value",
+          "target": "strict_gates",
+          "args": {
+            "value": "loud"
+          },
+          "fails": "invalid"
+        },
+        {
+          "op": "ramp",
+          "target": "new_checkout",
+          "args": {
+            "bps": 10001
+          },
+          "fails": "invalid"
+        },
+        {
+          "op": "set_variants",
+          "target": "strict_gates",
+          "args": {
+            "weights": {
+              "off": 5000
+            }
+          },
+          "fails": "invalid"
+        }
+      ],
+      "checks": [
+        {
+          "flag": "strict_gates",
+          "environment": "production",
+          "context": {
+            "units": {
+              "account": "acct_1"
+            }
+          },
+          "expected": {
+            "value": "off",
+            "variant": "off",
+            "reason": "DEFAULT",
+            "rule_id": null,
+            "error_code": null
+          }
+        }
+      ]
+    }
+  ]
+}

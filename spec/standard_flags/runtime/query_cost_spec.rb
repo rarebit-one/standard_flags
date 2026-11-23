@@ -10,6 +10,9 @@ RSpec.describe "runtime rule read cost", registry: RuntimeHelpers::REGISTRY do
     StandardFlags.config.runtime_rules = true
     StandardFlags.config.runtime_store = store
     StandardFlags::Runtime.clock = -> { time.first }
+    # Reads only: the end-of-work last_evaluated_at write is covered in
+    # evaluation_tracking_spec.
+    StandardFlags.config.track_evaluations = false
   end
 
   def unit_of_work(&)
@@ -94,6 +97,7 @@ RSpec.describe "runtime rule read cost", registry: RuntimeHelpers::REGISTRY do
   end
 
   it "checks the revision once per interval" do
+    StandardFlags.config.track_evaluations = false # its write has its own specs
     store.put_rule(:new_checkout, status: :running, fallthrough_value: true)
     reads = reads_during do
       10.times do

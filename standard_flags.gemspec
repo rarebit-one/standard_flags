@@ -40,6 +40,8 @@ Gem::Specification.new do |spec|
   #   sentry-ruby    — the Sentry and Metrics subscribers no-op without it.
   #   standard_health — StandardFlags::HealthCheck is only defined when it is,
   #                    and the 0.9+ contribution hook only runs when it loads.
+  #   standard_audit — operations write their audit rows through it when the
+  #                    host has loaded it, and only publish events otherwise.
 
   spec.add_development_dependency "brakeman"
   spec.add_development_dependency "bundler-audit"
