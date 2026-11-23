@@ -67,8 +67,9 @@ module StandardFlags
     end
 
     # The rake tasks that change flags. Each needs REASON= and runs as
-    # `StandardFlags::Actor.system("rake")`; it prints the outcome and the
-    # new revision.
+    # `StandardFlags::Actor.system("rake")`; it prints the outcome, the new
+    # revision, "started" when the change started a draft rule, and any
+    # warnings.
     class Command
       ACTOR = Actor.system("rake")
       # How an AT= ends: Z or an offset. A bare local time would be read in
@@ -156,8 +157,10 @@ module StandardFlags
 
         value = result.value
         state = value[:rule] || value[:state]
-        details = [ ("status #{state[:status]}" if state&.key?(:status)), *value.slice(:added, :updated, :removed).map { |k, v| "#{v} #{k}" } ]
-        Outcome.new(ok: true, message: "#{name}: ok, revision #{value[:revision]}#{" (#{details.compact.join(', ')})" unless details.compact.empty?}")
+        details = [ ("status #{state[:status]}" if state&.key?(:status)), ("started" if value[:started]),
+                    *value.slice(:added, :updated, :removed).map { |k, v| "#{v} #{k}" } ]
+        lines = [ "#{name}: ok, revision #{value[:revision]}#{" (#{details.compact.join(', ')})" unless details.compact.empty?}" ]
+        Outcome.new(ok: true, message: (lines + result.warnings.map { |w| "  warning: #{w}" }).join("\n"))
       end
 
       def refuse_result(name, result)

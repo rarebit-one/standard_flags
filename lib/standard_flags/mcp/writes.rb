@@ -3,7 +3,8 @@ module StandardFlags
     # A tool that runs one operation. `reason` is required and
     # `expected_revision` (the rule's revision from get_flag) optional; the
     # operation authorises, refuses pins, validates and audits, and its
-    # failure code becomes the error code.
+    # failure code becomes the error code. A success returns the Result's
+    # value, plus `warnings` when it has any.
     class OperationTool < Tool
       COMMON = {
         key: { type: "string", description: "The flag key" },
@@ -31,7 +32,7 @@ module StandardFlags
                                                          registry: registry, **operation_args(args))
         raise ToolError.new(result.code, result.errors.join("; ")) unless result.success?
 
-        result.value
+        result.warnings.empty? ? result.value : result.value.merge(warnings: result.warnings)
       end
 
       def target(args)
@@ -85,7 +86,8 @@ module StandardFlags
     class SetFlagValue < OperationTool
       tool_name "set_flag_value"
       description "Set a runtime rule's fallthrough value, served to every unit nothing else matched " \
-                  "(how a mode moves off → sensor → on, or a kill switch is thrown). null clears it."
+                  "(how a mode moves off → sensor → on, or a kill switch is thrown). null clears it. " \
+                  "A draft rule starts (the result says started: true); a paused one stays paused, with a warning."
       operation Operations::SetValue
       arguments({ value: { type: %w[string null], description: "on/off, a mode value or a variant; null clears" } },
                 required: %w[value])

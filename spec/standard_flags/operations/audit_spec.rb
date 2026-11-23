@@ -88,6 +88,16 @@ RSpec.describe StandardFlags::Operations::Audit, registry: OperationHelpers::REG
     expect(metadata).not_to have_key(:actor)
   end
 
+  it "records one row for SetValue starting a draft, its before and after showing the status and the value" do
+    install_standard_audit
+    expect(StandardFlags::Operations::SetValue.call(:ai_assistant, value: false, actor: user, reason: "incident")).to be_success
+    expect(rows.map { |r| r[:event] }).to eq(%w[standard_flags.flag.value_set])
+    metadata = rows.first[:metadata]
+    expect(metadata).to include(started: true, revision: 1)
+    expect(metadata[:before]).to include(status: "draft", fallthrough_value: nil, lock_version: 0)
+    expect(metadata[:after]).to include(status: "running", fallthrough_value: "off", lock_version: 1)
+  end
+
   it "records counts, never unit keys, for membership changes" do
     install_standard_audit
     StandardFlags::Operations::AddMembers.call(:new_checkout, keys: %w[acct-7731 acct-7732], actor: user, reason: "pilot")

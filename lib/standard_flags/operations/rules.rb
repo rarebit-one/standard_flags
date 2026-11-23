@@ -101,17 +101,45 @@ module StandardFlags
     # running rule matched. This is how a mode moves off → sensor → on at
     # runtime, and how a kill switch is thrown from the database.
     # `value: nil` clears it, so the code default serves.
+    #
+    # Setting a value on a draft rule (including the one created on first
+    # use) also starts it, in the same write: "set the kill switch off"
+    # serves at once rather than waiting for a Start. The running rule is
+    # checked as Start checks it, and anything staged on the draft (a ramp,
+    # variants, conditions, members, cohorts) serves from then on too. The
+    # Result's value and the `value_set` event carry `started: true`; no
+    # separate `started` event is published, and the one audit row's before
+    # and after show both the status and the value. Clearing (`nil`) never
+    # starts a rule.
+    #
+    # A paused rule stays paused (someone stood it down on purpose): the
+    # value is stored, and the Result warns that it isn't served until
+    # Start. A running or stopped rule keeps its status.
     class SetValue < Base
+      PAUSED = "rule is paused; the value is stored but not served until Start".freeze
+
       arguments required: %i[value]
 
       private
 
       def event = Events::FLAG_EVENTS[:value_set]
 
+      # The cohorts a draft attaches, which the check of the started rule
+      # reads.
+      def extra_cohort_keys
+        starts? ? validate.attachments(definition, @rule) : []
+      end
+
       def perform
         value = arg(:value).nil? ? nil : validate.value!(definition, arg(:value), "value")
-        save!(fallthrough_value: value)
-        nil
+        started = starts?
+        warn_caller(PAUSED) if @rule.paused? && !value.nil?
+        save!(fallthrough_value: value, **(started ? { status: "running" } : {}))
+        { started: started }
+      end
+
+      def starts?
+        @rule.draft? && !arg(:value).nil?
       end
     end
 

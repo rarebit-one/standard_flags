@@ -261,6 +261,16 @@ RSpec.describe StandardFlags::MCP, registry: OperationHelpers::REGISTRY do
       expect(call("ramp_flag", { "key" => "strict_gates", "bps" => 100, "value" => "sensor", "reason" => "x" })["rule"]).to include("rollout_value" => "sensor")
     end
 
+    it "say when set_flag_value started a draft, and warn when the rule is paused" do
+      started = call("set_flag_value", { "key" => "ai_assistant", "value" => "off", "reason" => "incident" })
+      expect(started).to include("started" => true, "rule" => include("status" => "running", "fallthrough_value" => "off"))
+      expect(started).not_to have_key("warnings")
+      call("pause_flag", { "key" => "ai_assistant", "reason" => "hold" })
+      paused = call("set_flag_value", { "key" => "ai_assistant", "value" => "on", "reason" => "later" })
+      expect(paused).to include("started" => false, "rule" => include("status" => "paused"),
+                                "warnings" => [ "rule is paused; the value is stored but not served until Start" ])
+    end
+
     it "return the operation's failure code" do
       call("ramp_flag", { "key" => "new_checkout", "bps" => 500, "reason" => "canary" })
       expect(call("start_flag", { "key" => "new_checkout", "reason" => "go", "expected_revision" => 0 })["error"])

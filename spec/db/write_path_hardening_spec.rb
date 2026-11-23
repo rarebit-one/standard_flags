@@ -281,7 +281,6 @@ RSpec.describe "write path hardening on Postgres", :db, registry: OperationHelpe
   describe "last_evaluated_at" do
     before do
       op!(ops::SetValue, :strict_gates, value: :sensor)
-      op!(ops::Start, :strict_gates)
     end
 
     it "is never written during an evaluation, only when the unit of work ends" do
@@ -323,7 +322,6 @@ RSpec.describe "write path hardening on Postgres", :db, registry: OperationHelpe
 
   it "keeps member_count right when purge runs while AddMembers is in flight" do
     op!(ops::SetValue, :strict_gates, value: :sensor)
-    op!(ops::Start, :strict_gates)
     rule_id = models::Rule.find_by!(key: "strict_gates").id
     expired_members!(rule_id, %w[x1 x2])
 
@@ -393,7 +391,6 @@ RSpec.describe "write path hardening on Postgres", :db, registry: OperationHelpe
     it "publishes nothing, and expires nothing, for a host transaction that rolls back" do
       StandardFlags.config.refresh_interval = 3_600
       op!(ops::SetValue, :global_banner, value: false)
-      op!(ops::Start, :global_banner)
       expect(StandardFlags.on?(:global_banner)).to be(false)
       events = events_during do
         models::Record.transaction do
@@ -408,7 +405,6 @@ RSpec.describe "write path hardening on Postgres", :db, registry: OperationHelpe
     it "publishes and expires when the host transaction commits" do
       StandardFlags.config.refresh_interval = 3_600
       op!(ops::SetValue, :global_banner, value: false)
-      op!(ops::Start, :global_banner)
       expect(StandardFlags.on?(:global_banner)).to be(false)
       events = []
       models::Record.transaction do
@@ -440,15 +436,18 @@ RSpec.describe "write path hardening on Postgres", :db, registry: OperationHelpe
   end
 
   describe "lock order" do
-    it "locks a rule's cohorts in one statement, by id, whatever the attachment order" do
-      %w[gamma alpha beta].each { |key| op!(ops::CreateCohort, key, unit: :account) }
-      %w[beta gamma alpha].each { |key| op!(ops::AttachCohort, :new_checkout, cohort: key, value: true) }
-      op!(ops::SetValue, :new_checkout, value: false)
+    { "Start" => [ OperationHelpers::Ops::Start, {} ],
+      "SetValue on a draft" => [ OperationHelpers::Ops::SetValue, { value: false } ] }.each do |name, (operation, args)|
+      it "locks a rule's cohorts in one statement, by id, whatever the attachment order (#{name})" do
+        %w[gamma alpha beta].each { |key| op!(ops::CreateCohort, key, unit: :account) }
+        %w[beta gamma alpha].each { |key| op!(ops::AttachCohort, :new_checkout, cohort: key, value: true) }
 
-      locks = DatabaseHelpers.queries { op!(ops::Start, :new_checkout) }.grep(/FOR UPDATE/)
-      expect(locks.size).to eq(2) # the rule, then its cohorts
-      expect(locks.first).to include('FROM "standard_flags_rules"')
-      expect(locks.last).to include('FROM "standard_flags_cohorts"', 'ORDER BY "standard_flags_cohorts"."id"')
+        locks = DatabaseHelpers.queries { op!(operation, :new_checkout, **args) }.grep(/FOR UPDATE/)
+        expect(locks.size).to eq(2) # the rule, then its cohorts
+        expect(locks.first).to include('FROM "standard_flags_rules"')
+        expect(locks.last).to include('FROM "standard_flags_cohorts"', 'ORDER BY "standard_flags_cohorts"."id"')
+        expect(models::Rule.find_by!(key: "new_checkout").status).to eq("running")
+      end
     end
 
     it "lets Starts whose rules attach the same cohorts in opposite orders run together" do

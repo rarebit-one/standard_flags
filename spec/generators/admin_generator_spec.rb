@@ -231,6 +231,17 @@ RSpec.describe StandardFlags::Generators::AdminGenerator, type: :generator do
       expect(store.rule(:home_hero)).to have_attributes(status: "stopped", stop_value: "savings")
     end
 
+    it "flashes that set_value started a draft, and the warning for a paused rule" do
+      post "/spec-admin/flags/ai_assistant/set_value", { value: "off", reason: "incident" }
+      follow_redirect!
+      expect(page["props"]["flash"]).to eq("notice" => "SetValue: done (revision 1, started)")
+      post "/spec-admin/flags/ai_assistant/pause", { reason: "hold" }
+      post "/spec-admin/flags/ai_assistant/set_value", { value: "on", reason: "later" }
+      follow_redirect!
+      expect(page["props"]["flash"])
+        .to eq("notice" => "SetValue: done (revision 3); rule is paused; the value is stored but not served until Start")
+    end
+
     it "flashes a refusal: a stale revision, a missing reason, a bad number" do
       post "/spec-admin/flags/new_checkout/ramp", { bps: "500", reason: "canary", expected_revision: "3" }
       follow_redirect!

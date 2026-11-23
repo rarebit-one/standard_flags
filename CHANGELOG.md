@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`SetValue` on a draft rule starts it.** A draft serves the code default,
+  so setting a value on a flag nobody had touched (through `SetValue`,
+  `flags:set` or the MCP `set_flag_value` tool) used to succeed and change
+  nothing until someone also ran `Start`; "set the kill switch off" did
+  nothing. Now `SetValue` with a value on a draft rule, including the one it
+  creates on first use, moves it to running in the same write: one
+  transaction, one revision, one `standard_flags.flag.value_set` event and
+  audit row whose before and after show both the status and the value. The
+  running rule is checked as `Start` checks it; a failure fails the whole
+  operation with `:invalid` and changes nothing. The Result's value, the
+  event and the audit row carry `started: true`; no separate `started` event
+  is published. Clearing the value (`nil`) never starts a rule.
+- **`SetValue` on a paused rule warns.** The rule stays paused and the value
+  is stored; `StandardFlags::Result#warnings` (new, empty by default) carries
+  `rule is paused; the value is stored but not served until Start`. A stopped
+  rule keeps its existing behaviour.
+- `flags:set` prints `started` or the paused warning, `set_flag_value`
+  returns `started` and any `warnings`, and the admin generator's flash
+  shows them. Ramp, SetVariants, SetConditions, member and cohort changes on
+  a draft still leave it a draft, and Restore still puts back exact statuses.
+
 ## [0.2.1] - 2026-11-23
 
 ### Fixed

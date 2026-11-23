@@ -460,13 +460,14 @@ Every change to a rule, cohort or membership goes through an operation in
 `StandardFlags::Operations`. Each one is called as
 `.call(key_or_cohort, actor:, reason:, expected_revision: nil, **args)` and
 returns a `StandardFlags::Result` (`success?`, `value`, `errors`, plus a
-`code` Symbol on failure). It never raises for a refusal.
+`code` Symbol on failure, and `warnings` for a change that committed but may
+not do what you expect). It never raises for a refusal.
 
 ```ruby
 ops = StandardFlags::Operations
 ops::Ramp.call(:new_checkout, bps: 500, actor: current_user, reason: "5% canary")
 ops::SetValue.call(:strict_gates, value: :sensor, actor: current_user, reason: "observe before enforcing")
-ops::SetValue.call(:ai_assistant, value: false, actor: current_user, reason: "provider outage")  # kill switch
+ops::SetValue.call(:ai_assistant, value: false, actor: current_user, reason: "provider outage")  # kill switch, served at once
 ops::Start.call(:new_checkout, actor: current_user, reason: "go")
 
 ops::CreateCohort.call("staff", unit: :account, name: "Staff", actor: current_user, reason: "dogfood")
@@ -484,6 +485,33 @@ checked against, so it can be passed straight back: a rule's `lock_version`,
 or for cohort operations the store's revision. `store_revision` is always
 `standard_flags_state.revision`.
 
+**`SetValue` on a draft starts it.** A rule starts as a draft, and a draft
+serves the code default, so a value set on a flag nobody had touched would
+otherwise change nothing until someone also ran `Start`. Instead, `SetValue`
+with a value on a draft rule (including the one it creates on first use)
+moves it to running in the same write: one transaction, one revision, one
+`standard_flags.flag.value_set` event and audit row, whose `before` and
+`after` show both the status and the value. The running rule is checked as
+`Start` checks it; if that fails, the whole operation fails with `:invalid`
+and nothing changes. Anything staged on the draft (a ramp, variants,
+conditions, members, cohorts) serves from then on too. The Result's value,
+the event and the audit row carry `started: true`; no separate
+`standard_flags.flag.started` event is published.
+
+```ruby
+result = ops::SetValue.call(:ai_assistant, value: false, actor: current_user, reason: "provider outage")
+result.value[:started]  # => true when it started a draft
+result.warnings         # => [] here; on a paused rule:
+                        #    ["rule is paused; the value is stored but not served until Start"]
+```
+
+On a **paused** rule the value is stored but the rule stays paused (someone
+stood it down on purpose), and the Result carries that warning. A running
+or **stopped** rule keeps its status. Clearing the value (`value: nil`)
+never starts a rule. Every other operation (`Ramp`, `SetVariants`,
+`SetConditions`, `AddMembers`/`RemoveMembers`, `AttachCohort`/`DetachCohort`)
+leaves a draft a draft, so changes can be staged and started together.
+
 | Operation | Scope | Does |
 |-----------|-------|------|
 | `Start` | `flags:write` | Draft or paused → running, after checking everything the rule would serve. |
@@ -491,7 +519,7 @@ or for cohort operations the store's revision. `store_revision` is always
 | `Stop(serve:)` | `flags:write` | → stopped, serving `serve:` to everyone (the winner, or the flag's `final:`) until the code drops the flag. |
 | `Ramp(bps:, value: nil)` | `flags:ramp` | Sets the percentage (0–10,000 basis points) and, for modes and experiments, the value it serves. At 10,000 it records `full_since`. |
 | `SetVariants(weights:)` | `flags:ramp` | Weights over the flag's variants or mode values, summing to 10,000. `{}` clears them. |
-| `SetValue(value:)` | `flags:write` | The fallthrough value, served to every unit nothing else matched. Moves a mode off → sensor → on and throws a kill switch. `nil` clears it. |
+| `SetValue(value:)` | `flags:write` | The fallthrough value, served to every unit nothing else matched. Moves a mode off → sensor → on and throws a kill switch. Starts a draft rule (above); a paused one stays paused, with a warning. `nil` clears it. |
 | `SetConditions(platforms:, versions:, segments:)` | `flags:write` | Replaces the conditions; omitted ones are cleared. |
 | `AddMembers(keys:, value:, unit:, expires_at:)` | `flags:write` | Adds units (records or keys) to a rule or a cohort. Adding an existing member with a new value or expiry keeps the old row as removed and adds a new one, so [Restore](#restore) can read it back; adding it unchanged writes nothing. |
 | `RemoveMembers(keys:, unit:)` | `flags:write` | Removes them (soft delete, see retention below). |
@@ -632,6 +660,9 @@ and `config.add_notifier`), always after the commit.
 For a console with no admin UI. Each task needs `REASON=` (written to the
 audit log), runs as `StandardFlags::Actor.system("rake")`, prints the outcome
 and the new revision, and refuses pinned flags with the variable's name.
+`flags:set` on a draft rule starts it and says so
+(`flags:set ai_assistant: ok, revision 1 (status running, started)`); on a
+paused rule it prints the warning on the next line.
 
 ```bash
 bin/rails flags:show KEY=new_checkout                 # declaration, value, pin, stored rule
@@ -753,7 +784,7 @@ end
 |------|-------|------|
 | `list_flags` | `flags:read` (per flag) | Every flag the actor may read: kind, owner, values, value with no unit, source, ENV pin, rule summary. |
 | `get_flag` | `flags:read`; with `unit_key`, `flags:write` and `reason` | One flag: value, reason, `rule_id` and source (`env_pin`, `runtime_rule`, `guard`, `code_default`, `error`, `test_override`), the ENV pin and the stored rule in full. With `unit_key` (normalised through the unit's `key:`, masked in the answer) it evaluates for that unit, which is a reveal (below). |
-| `start_flag`, `pause_flag`, `stop_flag`, `ramp_flag`, `set_flag_value` | as the operation | Run Start, Pause, Stop, Ramp and SetValue. |
+| `start_flag`, `pause_flag`, `stop_flag`, `ramp_flag`, `set_flag_value` | as the operation | Run Start, Pause, Stop, Ramp and SetValue. `set_flag_value` returns `started: true` when it started a draft, and `warnings` when the rule is paused. |
 | `list_members` | `flags:read` | One page (`offset`, `limit` up to 200) of a flag's (`key`) or a cohort's (`cohort`) members. |
 | `add_members`, `remove_members` | `flags:write` | Run AddMembers and RemoveMembers on a flag or a cohort. |
 | `list_cohorts`, `get_cohort` | `flags:read` (per cohort) | Cohorts with their unit, member count, archived state and the flags they're attached to. |

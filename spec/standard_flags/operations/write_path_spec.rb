@@ -140,7 +140,6 @@ RSpec.describe StandardFlags::Operations, registry: OperationHelpers::REGISTRY d
       StandardFlags.config.refresh_interval = 3_600
       expect(StandardFlags.on?(:global_banner)).to be(false)
       op!(ops::SetValue, :global_banner, value: true)
-      op!(ops::Start, :global_banner)
       expect(StandardFlags.on?(:global_banner)).to be(true)
     end
 
@@ -149,7 +148,6 @@ RSpec.describe StandardFlags::Operations, registry: OperationHelpers::REGISTRY d
       seen = Rails.application.executor.wrap do
         before = StandardFlags.on?(:global_banner)
         op!(ops::SetValue, :global_banner, value: true)
-        op!(ops::Start, :global_banner)
         [ before, StandardFlags.on?(:global_banner), StandardFlags::Runtime.snapshot.rule(:global_banner)&.status ]
       end
       expect(seen).to eq([ false, true, "running" ])
@@ -173,7 +171,6 @@ RSpec.describe StandardFlags::Operations, registry: OperationHelpers::REGISTRY d
       StandardFlags.config.refresh_interval = 0
       seen = read_around_in_another_unit_of_work do
         op!(ops::SetValue, :global_banner, value: true)
-        op!(ops::Start, :global_banner)
       end
       expect(seen).to eq([ false, false ])
       expect(Rails.application.executor.wrap { StandardFlags.on?(:global_banner) }).to be(true)
@@ -183,7 +180,6 @@ RSpec.describe StandardFlags::Operations, registry: OperationHelpers::REGISTRY d
   describe "Start, Pause and Stop" do
     it "pauses back to the code default, keeps the settings, and resumes" do
       op!(ops::SetValue, :strict_gates, value: :on)
-      op!(ops::Start, :strict_gates)
       expect(StandardFlags.mode(:strict_gates)).to be_on
       op!(ops::Pause, :strict_gates)
       expect(StandardFlags.evaluate(:strict_gates)).to have_attributes(value: :off, reason: "DEFAULT")
@@ -282,10 +278,96 @@ RSpec.describe StandardFlags::Operations, registry: OperationHelpers::REGISTRY d
   end
 
   describe "SetValue" do
-    it "throws a kill switch from the database" do
-      op!(ops::SetValue, :ai_assistant, value: false)
-      op!(ops::Start, :ai_assistant)
-      expect(StandardFlags.evaluate(:ai_assistant)).to have_attributes(value: false, reason: "KILL_SWITCH")
+    def events
+      seen = []
+      subscriber = ActiveSupport::Notifications.subscribe(/\Astandard_flags\.flag\./) { |name, *, payload| seen << [ name, payload ] }
+      yield
+      seen
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    it "throws a kill switch from the database, starting the rule it creates on first use" do
+      expect(store.rule(:ai_assistant)).to be_nil
+      result = op!(ops::SetValue, :ai_assistant, value: false)
+      expect(StandardFlags.evaluate(:ai_assistant)).to have_attributes(value: false, reason: "KILL_SWITCH", rule_id: "fallthrough")
+      expect(result.value).to include(started: true, revision: 1, store_revision: 1, rule: include(status: "running", fallthrough_value: "off"))
+      expect(result.warnings).to eq([])
+      expect(store.rule(:ai_assistant)).to have_attributes(status: "running", fallthrough_value: "off", lock_version: 1)
+    end
+
+    it "starts a draft in one write: one revision, one value_set event carrying started: true and both changes" do
+      op!(ops::Ramp, :new_checkout, bps: 2_500)
+      seen = events { op!(ops::SetValue, :new_checkout, value: false) }
+      expect(seen.map(&:first)).to eq(%w[standard_flags.flag.value_set])
+      payload = seen.first.last
+      expect(payload).to include(started: true, revision: 2, store_revision: 2)
+      expect(payload[:before]).to include(status: "draft", fallthrough_value: nil, percentage_bps: 2_500)
+      expect(payload[:after]).to include(status: "running", fallthrough_value: "off", percentage_bps: 2_500)
+      expect(store.revision).to eq(2)
+    end
+
+    it "serves what was staged on the draft once it starts" do
+      op!(ops::Ramp, :new_checkout, bps: StandardFlags::Bucket::BUCKETS)
+      expect(StandardFlags.on?(:new_checkout, for: for_account("acct-1"))).to be(false)
+      op!(ops::SetValue, :new_checkout, value: false)
+      expect(StandardFlags.evaluate(:new_checkout, for: for_account("acct-1"))).to have_attributes(value: true, rule_id: "percentage")
+    end
+
+    it "checks the started rule as Start does, and changes nothing when it fails" do
+      store.put_rule(:new_checkout, status: :draft, cohorts: { gone: true })
+      rule = store.rule(:new_checkout)
+      revision = store.revision
+      seen = events { expect(failure(op(ops::SetValue, :new_checkout, value: true), :invalid)).to include('cohort "gone" does not exist') }
+      expect(seen).to eq([])
+      expect(store.rule(:new_checkout)).to have_attributes(status: "draft", fallthrough_value: nil, lock_version: rule.lock_version)
+      expect(store.revision).to eq(revision)
+    end
+
+    it "keeps a paused rule paused, storing the value with a warning" do
+      op!(ops::SetValue, :strict_gates, value: :sensor)
+      op!(ops::Pause, :strict_gates)
+      result = op!(ops::SetValue, :strict_gates, value: :on)
+      expect(result.warnings).to eq([ "rule is paused; the value is stored but not served until Start" ])
+      expect(result.value).to include(started: false, rule: include(status: "paused", fallthrough_value: "on"))
+      expect(StandardFlags.evaluate(:strict_gates)).to have_attributes(value: :off, reason: "DEFAULT")
+      op!(ops::Start, :strict_gates)
+      expect(StandardFlags.mode(:strict_gates)).to be_on
+    end
+
+    it "leaves a stopped rule stopped, serving its stop value, without a warning" do
+      op!(ops::Stop, :home_hero, serve: "savings")
+      result = op!(ops::SetValue, :home_hero, value: "control")
+      expect(result.value).to include(started: false, rule: include(status: "stopped", fallthrough_value: "control", stop_value: "savings"))
+      expect(result.warnings).to eq([])
+      expect(StandardFlags.variant(:home_hero)).to eq("savings")
+    end
+
+    it "leaves a running rule running" do
+      op!(ops::SetValue, :strict_gates, value: :sensor)
+      result = op!(ops::SetValue, :strict_gates, value: :on)
+      expect(result.value).to include(started: false, rule: include(status: "running"))
+      expect(result.warnings).to eq([])
+    end
+
+    it "never starts a rule by clearing its value, and warns only when a value is stored on a paused one" do
+      result = op!(ops::SetValue, :global_banner, value: nil)
+      expect(result.value).to include(started: false, rule: include(status: "draft"))
+      op!(ops::SetValue, :strict_gates, value: :on)
+      op!(ops::Pause, :strict_gates)
+      expect(op!(ops::SetValue, :strict_gates, value: nil).warnings).to eq([])
+    end
+
+    it "leaves Ramp, SetVariants, SetConditions, members and cohorts on a draft staged" do
+      store.put_cohort(:staff, unit: :account)
+      op!(ops::Ramp, :new_checkout, bps: 500)
+      op!(ops::SetConditions, :new_checkout, platforms: %w[ios])
+      op!(ops::AddMembers, :new_checkout, keys: %w[acct-7731])
+      op!(ops::RemoveMembers, :new_checkout, keys: %w[acct-7731])
+      op!(ops::AttachCohort, :new_checkout, cohort: "staff", value: true)
+      op!(ops::DetachCohort, :new_checkout, cohort: "staff")
+      op!(ops::SetVariants, :home_hero, weights: { control: 5_000, savings: 5_000 })
+      expect([ store.rule(:new_checkout).status, store.rule(:home_hero).status ]).to eq(%w[draft draft])
     end
 
     it "moves a mode, refuses values the flag can't take, and clears with nil" do
@@ -353,7 +435,7 @@ RSpec.describe StandardFlags::Operations, registry: OperationHelpers::REGISTRY d
       subscriber = ActiveSupport::Notifications.subscribe("standard_flags.flag.value_set") { seen << StandardFlags.on?(:global_banner) }
       StandardFlags.config.refresh_interval = 0
       errors = collect_errors { op!(ops::SetValue, :global_banner, value: true) }
-      expect([ seen, errors.reports ]).to eq([ [ false ], [] ])
+      expect([ seen, errors.reports ]).to eq([ [ true ], [] ])
     ensure
       ActiveSupport::Notifications.unsubscribe(subscriber)
     end
@@ -535,7 +617,6 @@ RSpec.describe StandardFlags::Operations, registry: OperationHelpers::REGISTRY d
   it "works against the test helpers' store" do
     with_rule(:new_checkout, status: :draft)
     op!(ops::SetValue, :new_checkout, value: true)
-    op!(ops::Start, :new_checkout)
     expect(StandardFlags.on?(:new_checkout)).to be(true)
   end
 end

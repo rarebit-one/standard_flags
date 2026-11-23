@@ -25,19 +25,19 @@ RSpec.describe "the write path on Postgres", :db, registry: OperationHelpers::RE
       op!(ops::AddMembers, "cohort:staff", keys: %w[acct-7731 acct-7732])
       op!(ops::Ramp, :strict_gates, bps: 2_500, value: :on)
       op!(ops::SetVariants, :home_hero, weights: { control: 5_000, savings: 5_000 })
-      op!(ops::SetValue, :strict_gates, value: :sensor)
       op!(ops::SetConditions, :strict_gates, platforms: %w[ios], versions: { ios: ">= 2.0" })
       op!(ops::AttachCohort, :strict_gates, cohort: "staff", value: :on)
       op!(ops::AddMembers, :strict_gates, keys: [ "acct-7733" ], value: :off, expires_at: Time.now + 3_600)
       op!(ops::RemoveMembers, "cohort:staff", keys: [ "acct-7732" ])
-      op!(ops::Start, :strict_gates)
+      # Starts the draft, with everything staged on it.
+      op!(ops::SetValue, :strict_gates, value: :sensor)
     end
 
     it "writes the rule, one revision per operation" do
-      expect(revision).to eq(10)
+      expect(revision).to eq(9)
       rule = models::Rule.find_by!(key: "strict_gates")
       expect(rule).to have_attributes(status: "running", hash_version: 2, percentage_bps: 2_500, rollout_value: "on",
-                                      fallthrough_value: "sensor", member_count: 1, lock_version: 6,
+                                      fallthrough_value: "sensor", member_count: 1, lock_version: 5,
                                       cohorts: [ { "cohort" => "staff", "value" => "on" } ],
                                       conditions: { "platforms" => [ "ios" ], "versions" => { "ios" => ">= 2.0" } })
       expect(rule.salt).to match(/\A\h{32}\z/)
@@ -118,7 +118,6 @@ RSpec.describe "the write path on Postgres", :db, registry: OperationHelpers::RE
   # rolled-back rules.
   it "never reuses a rolled-back revision, so a process that saw it reloads" do
     op!(ops::SetValue, :global_banner, value: false)
-    op!(ops::Start, :global_banner)
     models::Record.transaction do
       op!(ops::SetValue, :global_banner, value: true)
       expect(StandardFlags.on?(:global_banner)).to be(true) # uncommitted, cached
@@ -135,12 +134,38 @@ RSpec.describe "the write path on Postgres", :db, registry: OperationHelpers::RE
 
   it "reloads on any change of revision, even one that goes down" do
     op!(ops::SetValue, :global_banner, value: true)
-    op!(ops::Start, :global_banner)
     expect(StandardFlags.on?(:global_banner)).to be(true)
     models::Rule.where(key: "global_banner").update_all(fallthrough_value: "off")
-    models::State.update_all(revision: 1)
+    models::State.update_all(revision: 0)
     time[0] += 5
     expect(StandardFlags.on?(:global_banner)).to be(false)
+  end
+
+  describe "SetValue on a draft" do
+    it "creates the rule running and serves it at once: one row, one revision" do
+      result = op!(ops::SetValue, :ai_assistant, value: false)
+      expect(result.value).to include(started: true, revision: 1, store_revision: 1)
+      expect(models::Rule.find_by!(key: "ai_assistant")).to have_attributes(status: "running", fallthrough_value: "off", lock_version: 1)
+      expect(revision).to eq(1)
+      expect(StandardFlags.evaluate(:ai_assistant, for: for_account(1))).to have_attributes(value: false, reason: "KILL_SWITCH")
+    end
+
+    it "rolls the whole write back when the started rule fails its check" do
+      op!(ops::CreateCohort, "staff", unit: :account)
+      op!(ops::AttachCohort, :new_checkout, cohort: "staff", value: true)
+      models::Cohort.where(key: "staff").update_all(archived_at: Time.now.utc)
+      before = [ models::Rule.find_by!(key: "new_checkout").attributes, revision ]
+      expect(op(ops::SetValue, :new_checkout, value: true)).to have_attributes(code: :invalid, errors: [ 'cohort "staff" is archived' ])
+      expect([ models::Rule.find_by!(key: "new_checkout").attributes, revision ]).to eq(before)
+    end
+
+    it "keeps a paused rule paused, with a warning" do
+      op!(ops::SetValue, :strict_gates, value: :sensor)
+      op!(ops::Pause, :strict_gates)
+      result = op!(ops::SetValue, :strict_gates, value: :on)
+      expect(result.warnings).to eq([ "rule is paused; the value is stored but not served until Start" ])
+      expect(models::Rule.find_by!(key: "strict_gates")).to have_attributes(status: "paused", fallthrough_value: "on")
+    end
   end
 
   it "rolls back a write that breaks a limit" do
@@ -185,9 +210,7 @@ RSpec.describe "the write path on Postgres", :db, registry: OperationHelpers::RE
     before do
       StandardFlags.config.evaluation_tracking_interval = 60
       op!(ops::SetValue, :new_checkout, value: true)
-      op!(ops::Start, :new_checkout)
       op!(ops::SetValue, :strict_gates, value: :on)
-      op!(ops::Start, :strict_gates)
       op!(ops::Pause, :strict_gates)
     end
 
