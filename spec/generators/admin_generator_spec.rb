@@ -9,7 +9,7 @@ require "generators/standard_flags/admin/admin_generator"
 # The base the booted spec controller inherits from: where a host keeps its
 # admin authentication. `X-User` names the signed-in user's id.
 class AdminSpecBaseController < ActionController::Base
-  skip_forgery_protection
+  protect_from_forgery with: :exception
 
   private
 

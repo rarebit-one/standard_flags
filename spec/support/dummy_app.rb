@@ -11,6 +11,9 @@ module Dummy
     config.hosts.clear
     config.active_support.deprecation = :stderr
     config.active_job.queue_adapter = :test
+    # As Rails' generated config/environments/test.rb does: request specs don't
+    # carry authenticity tokens; controllers still declare forgery protection.
+    config.action_controller.allow_forgery_protection = false
   end
 end
 
