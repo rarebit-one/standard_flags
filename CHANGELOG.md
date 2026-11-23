@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-23
+
 ### Fixed
 
 - **Booting with standard_health 0.9 loaded first.** The standard_health load
