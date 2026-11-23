@@ -29,10 +29,10 @@ RSpec.configure do |config|
 
   config.include FlagSpecHelpers
 
-  # Runs before standard_flags/rspec's own reset, which then clears overrides
-  # and report memory on top of the fresh registry and config.
-  # A `registry:` metadata proc is defined here, before standard_flags/rspec
-  # applies `flags:` metadata, the way a host app's registry is loaded at boot.
+  # Runs inside standard_flags/rspec's around-hook reset, on top of which it
+  # rebuilds a fresh registry and config. A `registry:` metadata proc is
+  # defined here, before standard_flags/rspec applies `flags:` metadata, the
+  # way a host app's registry is loaded at boot.
   config.prepend_before do |example|
     StandardFlags.reset!
     StandardFlags::Testing.activate!

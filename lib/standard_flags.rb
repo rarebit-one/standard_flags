@@ -125,10 +125,10 @@ module StandardFlags
       Snapshot.build(registry, Context.wrap(binding.local_variable_get(:for)))
     end
 
-    def sensor(key, for: nil, &block)
+    def sensor(key, for: nil, report: true, &block)
       raise ArgumentError, "sensor needs a block" unless block
 
-      Sensor.run(reader(for: binding.local_variable_get(:for)), key, &block)
+      Sensor.run(reader(for: binding.local_variable_get(:for)), key, report: report, &block)
     end
 
     def payload(audience, for: nil)

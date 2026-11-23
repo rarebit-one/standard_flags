@@ -64,6 +64,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Conformance** fixtures for runtime rules
   (`spec/fixtures/conformance/runtime/`), and a Postgres CI job that runs the
   database specs, including `Bucket.v2` against `Bucket.sql_v2`.
+- **`legacy_parser: :exact`** (with `legacy_true:`, default `%w[on]`) reads
+  legacy `env:` names the way an exact `ENV["X"] == "on"` reader did: on/off
+  kinds are on only for a `legacy_true:` value and pinned off by any other
+  value, including a set-but-blank one (an unset variable still falls
+  through; inverted names keep blank as unset); modes and experiments match
+  a value exactly and treat blank as unset. The
+  canonical `STANDARD_FLAGS_<KEY>` pin stays strict. Conformance fixtures in
+  `legacy_exact.json`.
+- **Mode lifecycle.** `mode` accepts `remove_by:` with `final:` (one of its
+  values), or `permanent: true`, with the same rules as `flag`. Stale modes
+  appear in `flags:stale`, Diagnostics and the health check's warnings.
+- **`StandardFlags.sensor(..., report: false)`** swallows an observe error in
+  sensor mode without reporting it; the notification still carries the error
+  class. The default still reports.
+
+### Changed
+
+- The manifest's `permanent` key is now on entries of kind `mode` as well as
+  `flag`. Regenerate a committed manifest after upgrading.
+
+### Fixed
+
+- **Overrides set in an `around` hook were discarded.** `standard_flags/rspec`
+  reset overrides in `config.before`, which runs inside `example.run`, so
+  `around { |ex| with_flag(:x, true) { ex.run } }` read the code default. The
+  reset now runs in a config-level `around` hook, outside every group-level
+  one, and overrides set before an example starts fail it with a clear error
+  instead of being dropped. `flags:` metadata and `before` hooks work as
+  before. `StandardFlags::RSpecSupport.install(config)` wires the helpers into
+  a custom configuration.
 
 ## [0.1.0] - 2026-11-22
 

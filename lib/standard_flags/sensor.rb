@@ -9,17 +9,24 @@ module StandardFlags
   # * off    — neither block runs; returns nil.
   # * sensor — observe runs and its result goes into a `sensor.standard_flags`
   #            notification; returns the observation. An exception in observe
-  #            is reported and swallowed, because sensor mode must not change
-  #            behaviour.
+  #            is swallowed, because sensor mode must not change behaviour,
+  #            and reported unless `report: false` (for probes whose errors
+  #            are expected; the notification still carries the error class).
   # * on     — observe runs, the notification fires, then enforce receives
   #            the observation; returns enforce's result. Exceptions propagate.
   class Sensor
     VALUES = Definition::PRESETS.fetch(:sensor)
 
-    def self.run(reader, key)
-      sensor = new
+    def self.run(reader, key, report: true)
+      raise ArgumentError, "report: must be true or false" unless [ true, false ].include?(report)
+
+      sensor = new(report: report)
       yield sensor
       sensor.call(reader, key)
+    end
+
+    def initialize(report: true)
+      @report = report
     end
 
     def observe(&block)
@@ -59,7 +66,7 @@ module StandardFlags
       notify(key, :sensor, observed)
       observed
     rescue StandardError => e
-      Reporting.report(e, flag: key.to_s, mode: "sensor")
+      Reporting.report(e, flag: key.to_s, mode: "sensor") if @report
       notify(key, :sensor, nil, e)
       nil
     end
