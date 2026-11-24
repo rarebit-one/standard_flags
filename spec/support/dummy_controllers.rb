@@ -71,9 +71,7 @@ class LegacyController < DummyBaseController
 end
 
 # Client context and FeatureDisabled.
-class ClientFeaturesController < ActionController::Base
-  include StandardFlags::Controller
-
+class ClientFeaturesController < DummyBaseController
   def index
     render json: { features: standard_flags_payload(:mobile), client: standard_flags_client.to_h }
   end
@@ -94,9 +92,7 @@ class ClientFeaturesController < ActionController::Base
   end
 end
 
-class PinnedClientController < ActionController::Base
-  include StandardFlags::Controller
-
+class PinnedClientController < DummyBaseController
   requires_flag :new_checkout
 
   def index
