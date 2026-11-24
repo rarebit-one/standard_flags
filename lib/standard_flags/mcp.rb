@@ -25,6 +25,13 @@ module StandardFlags
   # member?) is a reveal too: flags:write, a reason, and a
   # `standard_flags.flag.probed` row.
   #
+  # `client:` (a StandardFlags::Client, a Hash, or a lambda taking the
+  # actor) is the client ListFlags and GetFlag evaluate for; by default they
+  # evaluate with no client.
+  #
+  # An app's own tools can be gated on flags with StandardFlags::MCP::Gated;
+  # `MCP.visible(tools, actor:)` filters a tool list for `tools/list`.
+  #
   # One instance may serve every call, from any thread: the instance is
   # frozen, and each call runs on its own copy, which holds that call's
   # actor, arguments and store load. Operator reads never mark a rule as
@@ -47,14 +54,33 @@ module StandardFlags
     # One instance of every tool. `registry:` pins a registry (specs);
     # by default each call reads StandardFlags.registry, so a code reload
     # is picked up.
-    def tools(registry: nil)
-      TOOLS.map { |klass| klass.new(registry: registry) }
+    def tools(registry: nil, client: nil)
+      TOOLS.map { |klass| klass.new(registry: registry, client: client) }
     end
 
     # The tool called `name`, or nil.
-    def tool(name, registry: nil)
+    def tool(name, registry: nil, client: nil)
       klass = TOOLS.find { |candidate| candidate.tool_name == name.to_s }
-      klass&.new(registry: registry)
+      klass&.new(registry: registry, client: client)
+    end
+
+    # The tools to list for `actor`: every tool, less the gated ones
+    # (StandardFlags::MCP::Gated) with a required flag off. `context:`
+    # evaluates every gate for that context instead of each one's `for:`;
+    # `client:` overrides each gate's client.
+    #
+    #   StandardFlags::MCP.visible(app_tools + StandardFlags::MCP.tools, actor: current_user,
+    #                              client: StandardFlags::Client.from_headers(request.headers))
+    def visible(tools, actor: nil, context: nil, client: nil)
+      tools.reject do |tool|
+        tool.respond_to?(:standard_flags_disabled) &&
+          tool.standard_flags_disabled(actor: actor, context: context, client: client)
+      end
+    end
+
+    # The tool error for a StandardFlags::FeatureDisabled.
+    def feature_disabled(error)
+      { "error" => { "code" => "feature_disabled", "message" => error.message.to_s } }
     end
 
     # A unit key as operators see it by default: the last four characters
@@ -109,8 +135,13 @@ module StandardFlags
         end
       end
 
-      def initialize(registry: nil)
+      def initialize(registry: nil, client: nil)
+        unless client.nil? || client.is_a?(Client) || client.is_a?(Hash) || client.respond_to?(:call)
+          raise ArgumentError, "client: must be a StandardFlags::Client, a Hash or a callable"
+        end
+
         @registry = registry
+        @client = client unless client.nil?
         freeze
       end
 
@@ -143,6 +174,18 @@ module StandardFlags
 
       def registry
         @registry || StandardFlags.registry
+      end
+
+      # What reads evaluate for: no unit, and the configured client.
+      def evaluation_context
+        return @evaluation_context if defined?(@evaluation_context)
+
+        client = @client.respond_to?(:call) ? call_with_actor(@client) : @client
+        @evaluation_context = client.nil? ? Context.empty : Context.new(client: client)
+      end
+
+      def call_with_actor(callable)
+        callable.is_a?(Proc) && callable.arity.zero? ? callable.call : callable.call(actor)
       end
 
       def error(code, message)
@@ -229,6 +272,7 @@ require "standard_flags/mcp/flags"
 require "standard_flags/mcp/writes"
 require "standard_flags/mcp/members"
 require "standard_flags/mcp/cohorts"
+require "standard_flags/mcp/gating"
 
 module StandardFlags
   module MCP

@@ -11,6 +11,9 @@ require "standard_flags/evaluation"
 require "standard_flags/mode"
 require "standard_flags/definition"
 require "standard_flags/registry"
+require "standard_flags/semantic_version"
+require "standard_flags/version_range"
+require "standard_flags/client"
 require "standard_flags/context"
 require "standard_flags/memo"
 require "standard_flags/reporting"
@@ -132,6 +135,15 @@ module StandardFlags
       raise ArgumentError, "sensor needs a block" unless block
 
       Sensor.run(reader(for: binding.local_variable_get(:for)), key, report: report, &block)
+    end
+
+    # Raises StandardFlags::FeatureDisabled unless the flag is enabled (on,
+    # or a mode past its first value). StandardFlags::Controller renders it
+    # as a `feature_disabled` denial.
+    def require!(key, for: nil)
+      return true if reader(for: binding.local_variable_get(:for)).enabled?(key)
+
+      raise FeatureDisabled, key
     end
 
     def payload(audience, for: nil)

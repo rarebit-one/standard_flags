@@ -1,0 +1,330 @@
+{
+  "description": "Version ranges as every client and server evaluates them: SemVer 2.0 versions (with the MAJOR.MINOR and MAJOR shorthands, missing parts 0; prerelease and build only on the full form; build metadata ignored) against ranges of space-separated comparators (>=, >, <=, <, =; whitespace after the operator optional), all of which must hold, joined by || alternatives. Ordering is SemVer precedence (\u00a711) and nothing more, so <2.0.0 admits 2.0.0-beta.1. A version that does not parse matches no range. invalid_ranges must be refused (RubyGems requirements are a server-side, read-only compatibility form and are not part of this syntax).",
+  "cases": [
+    {
+      "range": ">=1.4.0 <2.0.0",
+      "version": "1.4.0",
+      "matched": true
+    },
+    {
+      "range": ">=1.4.0 <2.0.0",
+      "version": "1.9.9",
+      "matched": true
+    },
+    {
+      "range": ">=1.4.0 <2.0.0",
+      "version": "1.4.0-rc.1",
+      "matched": false
+    },
+    {
+      "range": ">=1.4.0 <2.0.0",
+      "version": "2.0.0-beta.1",
+      "matched": true
+    },
+    {
+      "range": ">=1.4.0 <2.0.0",
+      "version": "2.0.0",
+      "matched": false
+    },
+    {
+      "range": ">=1.4.0 <2.0.0",
+      "version": "1.3.9",
+      "matched": false
+    },
+    {
+      "range": ">1.4.0",
+      "version": "1.5.0",
+      "matched": true
+    },
+    {
+      "range": ">1.4.0",
+      "version": "1.4.1",
+      "matched": true
+    },
+    {
+      "range": ">1.4.0",
+      "version": "1.4.0",
+      "matched": false
+    },
+    {
+      "range": ">1.4.0",
+      "version": "1.4.0+9",
+      "matched": false
+    },
+    {
+      "range": "<=1.4.0",
+      "version": "1.4.0",
+      "matched": true
+    },
+    {
+      "range": "<=1.4.0",
+      "version": "1.4",
+      "matched": true
+    },
+    {
+      "range": "<=1.4.0",
+      "version": "1",
+      "matched": true
+    },
+    {
+      "range": "<=1.4.0",
+      "version": "1.4.0-alpha",
+      "matched": true
+    },
+    {
+      "range": "<=1.4.0",
+      "version": "1.4.1",
+      "matched": false
+    },
+    {
+      "range": "=1.4.0",
+      "version": "1.4.0+381",
+      "matched": true
+    },
+    {
+      "range": "=1.4.0",
+      "version": "1.4",
+      "matched": true
+    },
+    {
+      "range": "=1.4.0",
+      "version": "1.4.0-0",
+      "matched": false
+    },
+    {
+      "range": "=1.4.0",
+      "version": "1.4.1",
+      "matched": false
+    },
+    {
+      "range": ">=0.9.0 || =0.8.5-beta.1",
+      "version": "0.8.5-beta.1",
+      "matched": true
+    },
+    {
+      "range": ">=0.9.0 || =0.8.5-beta.1",
+      "version": "0.9.0",
+      "matched": true
+    },
+    {
+      "range": ">=0.9.0 || =0.8.5-beta.1",
+      "version": "0.8.5",
+      "matched": false
+    },
+    {
+      "range": ">=0.9.0 || =0.8.5-beta.1",
+      "version": "0.8.5-beta.2",
+      "matched": false
+    },
+    {
+      "range": ">= 1.4 < 2",
+      "version": "1.4.0",
+      "matched": true
+    },
+    {
+      "range": ">= 1.4 < 2",
+      "version": "2.0.0",
+      "matched": false
+    },
+    {
+      "range": "=2",
+      "version": "2.0.0",
+      "matched": true
+    },
+    {
+      "range": "=2",
+      "version": "2",
+      "matched": true
+    },
+    {
+      "range": "=2",
+      "version": "2.0",
+      "matched": true
+    },
+    {
+      "range": "=2",
+      "version": "2.0.1",
+      "matched": false
+    },
+    {
+      "range": "<1.0.0-alpha",
+      "version": "1.0.0-0",
+      "matched": true
+    },
+    {
+      "range": ">1.0.0-0",
+      "version": "1.0.0-alpha",
+      "matched": true
+    },
+    {
+      "range": "<1.0.0-0",
+      "version": "1.0.0-alpha",
+      "matched": false
+    },
+    {
+      "range": "<1.0.0-alpha.1",
+      "version": "1.0.0-alpha",
+      "matched": true
+    },
+    {
+      "range": ">1.0.0-alpha",
+      "version": "1.0.0-alpha.1",
+      "matched": true
+    },
+    {
+      "range": "<1.0.0-alpha",
+      "version": "1.0.0-alpha.1",
+      "matched": false
+    },
+    {
+      "range": "<1.0.0-alpha.beta",
+      "version": "1.0.0-alpha.1",
+      "matched": true
+    },
+    {
+      "range": ">1.0.0-alpha.1",
+      "version": "1.0.0-alpha.beta",
+      "matched": true
+    },
+    {
+      "range": "<1.0.0-alpha.1",
+      "version": "1.0.0-alpha.beta",
+      "matched": false
+    },
+    {
+      "range": "<1.0.0-beta",
+      "version": "1.0.0-alpha.beta",
+      "matched": true
+    },
+    {
+      "range": ">1.0.0-alpha.beta",
+      "version": "1.0.0-beta",
+      "matched": true
+    },
+    {
+      "range": "<1.0.0-alpha.beta",
+      "version": "1.0.0-beta",
+      "matched": false
+    },
+    {
+      "range": "<1.0.0-beta.2",
+      "version": "1.0.0-beta",
+      "matched": true
+    },
+    {
+      "range": ">1.0.0-beta",
+      "version": "1.0.0-beta.2",
+      "matched": true
+    },
+    {
+      "range": "<1.0.0-beta",
+      "version": "1.0.0-beta.2",
+      "matched": false
+    },
+    {
+      "range": "<1.0.0-beta.11",
+      "version": "1.0.0-beta.2",
+      "matched": true
+    },
+    {
+      "range": ">1.0.0-beta.2",
+      "version": "1.0.0-beta.11",
+      "matched": true
+    },
+    {
+      "range": "<1.0.0-beta.2",
+      "version": "1.0.0-beta.11",
+      "matched": false
+    },
+    {
+      "range": "<1.0.0-rc.1",
+      "version": "1.0.0-beta.11",
+      "matched": true
+    },
+    {
+      "range": ">1.0.0-beta.11",
+      "version": "1.0.0-rc.1",
+      "matched": true
+    },
+    {
+      "range": "<1.0.0-beta.11",
+      "version": "1.0.0-rc.1",
+      "matched": false
+    },
+    {
+      "range": "<1.0.0",
+      "version": "1.0.0-rc.1",
+      "matched": true
+    },
+    {
+      "range": ">1.0.0-rc.1",
+      "version": "1.0.0",
+      "matched": true
+    },
+    {
+      "range": "<1.0.0-rc.1",
+      "version": "1.0.0",
+      "matched": false
+    },
+    {
+      "range": ">1.0.0-9",
+      "version": "1.0.0-20261125123045",
+      "matched": true
+    },
+    {
+      "range": ">=999999999999.0.0",
+      "version": "1000000000000.0.0",
+      "matched": true
+    },
+    {
+      "range": ">=0.0.0",
+      "version": "v1.4.0",
+      "matched": false
+    },
+    {
+      "range": ">=0.0.0",
+      "version": "1.4.0.1",
+      "matched": false
+    },
+    {
+      "range": ">=0.0.0",
+      "version": "01.4.0",
+      "matched": false
+    },
+    {
+      "range": ">=0.0.0",
+      "version": "1.4-beta",
+      "matched": false
+    },
+    {
+      "range": ">=0.0.0",
+      "version": "1.4.0-01",
+      "matched": false
+    },
+    {
+      "range": ">=0.0.0",
+      "version": "",
+      "matched": false
+    },
+    {
+      "range": ">=0.0.0",
+      "version": null,
+      "matched": false
+    }
+  ],
+  "invalid_ranges": [
+    ">=1.4.0<2.0.0",
+    "> = 1",
+    "1.4.0",
+    ">=1.4.0 <",
+    ">=1 ||",
+    "|| >=1",
+    "~> 1.4",
+    ">= 1.4, < 2",
+    "^1.4",
+    "~1.4",
+    ">=v1",
+    ">=1.2.3.4",
+    ""
+  ]
+}

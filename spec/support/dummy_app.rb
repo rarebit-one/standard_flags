@@ -28,6 +28,10 @@ Dummy::Application.routes.draw do
   get "/legacy/api" => "legacy#api"
   get "/legacy/page" => "legacy#page"
   get "/legacy/plain" => "legacy#plain"
+  get "/client/features" => "client_features#index"
+  get "/client/checkout" => "client_features#checkout"
+  get "/client/raise" => "client_features#raise_disabled"
+  get "/client/pinned" => "pinned_client#index"
 end
 
 require_relative "dummy_controllers"

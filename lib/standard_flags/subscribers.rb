@@ -15,6 +15,8 @@ module StandardFlags
   # * rule_invalid.standard_flags          — a stored rule its flag can't serve
   # * targeting_key_missing.standard_flags — a rule needs a unit key the
   #                                          context doesn't have
+  # * client_invalid.standard_flags        — a client header that didn't
+  #                                          parse (field and header name)
   #
   # @api private
   class Subscribers

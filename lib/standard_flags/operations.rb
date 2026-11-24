@@ -22,8 +22,6 @@ module StandardFlags
   # Each is called as `.call(key_or_cohort, actor:, reason:, expected_revision: nil, **args)` and
   # returns a StandardFlags::Result. See Base for the steps every one takes.
   module Operations
-    SCOPES = %w[flags:read flags:write flags:ramp].freeze
-
     # Names a cohort where an operation takes a flag key or a cohort, for
     # example `AddMembers.call(Operations.cohort(:staff), ...)`. The string
     # "cohort:staff" works too.

@@ -54,11 +54,19 @@ module StandardFlags
         unit
       end
 
+      # The stored form of a version range: as given when it is already in
+      # the neutral syntax, else the neutral translation of a RubyGems
+      # requirement (`"~> 1.4"` → `">=1.4.0 <2.0.0"`).
       def version_range!(range)
-        Gem::Requirement.new(*range.to_s.split(",").map(&:strip))
-        range.to_s
-      rescue Gem::Requirement::BadRequirementError, ArgumentError
-        invalid!("version range #{range.inspect} does not parse")
+        return range.to_s if VersionRange.neutral(range.to_s)
+
+        VersionRange.translate(range.to_s) || invalid!("version range #{range.inspect} does not parse")
+      end
+
+      def build_range!(range)
+        return range.to_s if BuildRange.parse(range.to_s)
+
+        invalid!("build range #{range.inspect} does not parse")
       end
 
       def conditions_size!(conditions, config)
@@ -109,6 +117,7 @@ module StandardFlags
           end
           rule.platforms
           rule.versions.each_value { |range| version_range!(range) }
+          rule.builds.each_value { |range| build_range!(range) }
           rule.segments.each { |segment| value!(definition, segment["value"], "segment #{segment['name']}'s value") }
           rule.cohort_attachments.each do |key, value|
             cohort!(definition, key, cohorts[key])

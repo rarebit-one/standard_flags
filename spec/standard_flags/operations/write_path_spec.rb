@@ -383,7 +383,7 @@ RSpec.describe StandardFlags::Operations, registry: OperationHelpers::REGISTRY d
     it "replaces the conditions and validates them" do
       op!(ops::SetConditions, :new_checkout, platforms: %w[iOS android], versions: { "Android" => ">= 1.4, < 2" }, segments: { beta: true })
       expect(store.rule(:new_checkout).conditions).to eq(
-        "platforms" => %w[ios android], "versions" => { "android" => ">= 1.4, < 2" },
+        "platforms" => %w[ios android], "versions" => { "android" => ">=1.4.0 <2.0.0" },
         "segments" => [ { "name" => "beta", "value" => "on" } ]
       )
       op!(ops::SetConditions, :new_checkout, platforms: %w[ios])
@@ -395,6 +395,9 @@ RSpec.describe StandardFlags::Operations, registry: OperationHelpers::REGISTRY d
     {
       "a version range that doesn't parse" => [ :new_checkout, { versions: { ios: "around 2" } }, "does not parse" ],
       "versions that aren't a Hash" => [ :new_checkout, { versions: [ "ios" ] }, "Hash" ],
+      "a neutral range with a dangling operator" => [ :new_checkout, { versions: { ios: ">=1.4.0 <" } }, "does not parse" ],
+      "a build range that doesn't parse" => [ :new_checkout, { builds: { android: ">= 1.4.0" } }, "build range \">= 1.4.0\" does not parse" ],
+      "builds that aren't a Hash" => [ :new_checkout, { builds: [ ">=1" ] }, "builds must be a Hash" ],
       "a blank platform" => [ :new_checkout, { platforms: [ "" ] }, "list of names" ],
       "a blank segment name" => [ :new_checkout, { segments: { " " => true } }, "blank" ],
       "a segment value the flag can't take" => [ :new_checkout, { segments: { beta: :loud } }, "segment beta" ],
@@ -403,6 +406,22 @@ RSpec.describe StandardFlags::Operations, registry: OperationHelpers::REGISTRY d
       it "refuses #{name}" do
         expect(failure(op(ops::SetConditions, key, **args), :invalid)).to include(message)
       end
+    end
+
+    it "stores a neutral version range as given and a RubyGems one translated" do
+      op!(ops::SetConditions, :new_checkout, versions: { ios: ">= 2.0", android: "~> 1.4.2", web: ">=1.0.0 <2.0.0 || =0.9.5-beta.1" })
+      expect(store.rule(:new_checkout).versions)
+        .to eq("ios" => ">= 2.0", "android" => ">=1.4.2 <1.5.0", "web" => ">=1.0.0 <2.0.0 || =0.9.5-beta.1")
+    end
+
+    it "stores build ranges per platform alongside version ranges" do
+      op!(ops::SetConditions, :new_checkout, versions: { android: ">=1.4.0" }, builds: { "Android" => ">=120 <200" })
+      expect(store.rule(:new_checkout).conditions).to eq("versions" => { "android" => ">=1.4.0" }, "builds" => { "android" => ">=120 <200" })
+    end
+
+    it "refuses to start a rule whose stored build range is malformed" do
+      store.put_rule(:new_checkout, status: :draft, fallthrough_value: true, conditions: { "builds" => { "ios" => "lots" } })
+      expect(failure(op(ops::Start, :new_checkout), :invalid)).to include("build range \"lots\" does not parse")
     end
 
     it "limits the size of the conditions" do

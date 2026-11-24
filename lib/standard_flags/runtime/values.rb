@@ -68,10 +68,17 @@ module StandardFlags
         shaped(condition("platforms") || [], Array, "conditions.platforms").map { |platform| platform.to_s.downcase }
       end
 
-      # `{ "android" => ">= 1.4.0" }`
+      # `{ "android" => ">=1.4.0 <2.0.0" }` (a StandardFlags::VersionRange;
+      # RubyGems requirements stored by 0.2.x still read)
       def versions
         shaped(condition("versions") || {}, Hash, "conditions.versions")
           .to_h { |platform, requirement| [ platform.to_s.downcase, requirement ] }
+      end
+
+      # `{ "android" => ">=120 <200" }` (a StandardFlags::BuildRange)
+      def builds
+        shaped(condition("builds") || {}, Hash, "conditions.builds")
+          .to_h { |platform, range| [ platform.to_s.downcase, range ] }
       end
 
       # `{ variant => weight }`

@@ -41,6 +41,9 @@ lib/standard_flags/
 ├── definition.rb                   # One declared flag + per-declaration validation
 ├── registry.rb                     # Immutable registry + Builder DSL + cross-flag validation
 ├── context.rb                      # Actors per unit, env override, client attributes
+├── client.rb                       # Calling client (platform, version, build); X-Client-* header parsing
+├── semantic_version.rb             # StandardFlags::Version: SemVer 2.0 + shorthands, precedence
+├── version_range.rb                # VersionRange / BuildRange: portable comparator syntax; RubyGems ranges read
 ├── parser.rb                       # The one strict ENV parser
 ├── env_pin.rb                      # Side-effect-free scan of canonical + legacy variables
 ├── resolvers.rb                    # The evaluation chain (override, guard, pin, default)
@@ -56,7 +59,8 @@ lib/standard_flags/
 ├── diagnostics.rb / health_check.rb# Diagnostics hash; opt-in standard_health check
 ├── runtime.rb + runtime/            # Runtime rules: stores, cache, resolver, evaluation tracker
 ├── operations.rb + operations/     # The write path: audited operations, validation, audit, restore
-├── mcp.rb + mcp/                   # Operator tools (list/get/write flags, members, cohorts); no MCP framework
+├── mcp.rb + mcp/                   # Operator tools (list/get/write flags, members, cohorts); no MCP framework;
+│                                   #   mcp/gating.rb gates an app's own tools on flags
 ├── audit_trail.rb                  # Reads write-path history back from standard_audit's audit_logs
 ├── result.rb / actor.rb / events.rb# Operation results, system actors, published event names
 ├── purge_job.rb                    # Membership purge (autoloaded; needs activejob)
@@ -65,7 +69,8 @@ lib/standard_flags/
 └── engine.rb                       # Executor hook, registry loading, subscribers, rake tasks
 lib/tasks/standard_flags.rake
 lib/generators/standard_flags/install/    # install, migrations, admin (controller, routes, Inertia pages)
-spec/fixtures/conformance/          # Shared evaluation fixtures (language-neutral)
+spec/fixtures/conformance/          # Shared evaluation fixtures (language-neutral);
+                                    #   versions/version_ranges.json is the client-side range contract
 ```
 
 ## Key Rules

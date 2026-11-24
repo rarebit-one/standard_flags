@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Client context.** `StandardFlags::Client` (platform, version, build),
+  immutable. `Client.from_headers(headers)` reads `X-Client-Platform`,
+  `X-Client-Version` and `X-Client-Build` (`config.client_headers`); the
+  platform is downcased and must be in `config.client_platforms` (default
+  android, ios, web, desktop), the version must parse and the build must be
+  a non-negative integer. A value that fails is dropped and emits
+  `client_invalid.standard_flags`; nothing raises or reports. No headers
+  gives an empty client.
+- `StandardFlags::Controller` reads the headers once per request
+  (`standard_flags_client`) and evaluates guards and payloads for
+  `standard_flags_context` plus that client, unless the context already
+  names one. `config.read_client_headers = false` opts out.
+- `Context.wrap(value, client:)` and `Context#with_client`, so `for:` can
+  carry a client. Jobs' `requires_flag` takes `client:` (a value or a lambda
+  run in the job), and the MCP tools take `client:`
+  (`StandardFlags::MCP.tools(client:)`).
+- **Versions and portable ranges.** `StandardFlags::Version` (SemVer 2.0 with
+  `MAJOR.MINOR` and `MAJOR` shorthands, SemVer precedence, build metadata
+  ignored) and `StandardFlags::VersionRange`: space-separated comparators
+  (`>=`, `>`, `<=`, `<`, `=`), all of which must hold, with `||`
+  alternatives, e.g. `>=1.4.0 <2.0.0 || =0.9.5-beta.1`. Kotlin and
+  TypeScript clients can implement the same syntax.
+- **Build conditions.** Runtime rules take `conditions.builds`
+  (`{ platform => range }` over integers, e.g. `>=120 <200`, as
+  `StandardFlags::BuildRange`), checked with version ranges; both must hold.
+  `SetConditions` and `Testing.rule` take `builds:`.
+- **`StandardFlags::FeatureDisabled`**, a raisable `feature_disabled` with
+  the flag's `key`, wire name (`feature`) and `status` (403), and
+  `StandardFlags.require!(key, for:)`, which raises it.
+  `StandardFlags::Controller` rescues it and renders it exactly like a
+  `requires_flag` denial, through `config.controller_responder` when set.
+- **Gated MCP tools.** `StandardFlags::MCP::Gated` gives an app's own tools
+  `requires_flag :key` (with optional `for:` and `client:`); a call while a
+  flag is off returns `{"error":{"code":"feature_disabled",...}}` without
+  running the tool, and `StandardFlags::MCP.visible(tools, actor:)` leaves
+  such tools out of `tools/list`. The gem's own tools are not gated.
+- Conformance: `runtime/client.json` (neutral and RubyGems ranges,
+  prerelease ordering, shorthand versions, build ranges) and
+  `versions/version_ranges.json`, a standalone version-and-range fixture for
+  non-Ruby clients. Every existing runtime case with a version range also
+  runs with the range in canonical neutral form.
+
+### Changed
+
+- Client conditions in runtime rules compare with `StandardFlags::Version`
+  and `VersionRange` instead of `Gem::Version` and `Gem::Requirement`.
+  Stored RubyGems ranges (`">= 1.4.0"`, `"~> 1.4"`, `">= 1.4, < 2"`,
+  `"!= 1.5"`) are translated when read and keep their meaning for SemVer
+  client versions. Edge cases that differ: a client version outside SemVer
+  (`1.4.0.1`, `v1.4`) now meets no range; a stored RubyGems range naming a
+  version with more than three non-zero release segments (`>= 1.2.3.4`) now
+  fails its flag with PARSE_ERROR; and a prerelease of the next bump
+  boundary (`2.0.0-beta.1` against `~> 1.4`) now meets the range, as it does
+  under plain SemVer ordering.
+- `SetConditions` stores version ranges in the neutral syntax: a neutral
+  range as given, a RubyGems one translated (`">= 1.4, < 2"` is stored as
+  `">=1.4.0 <2.0.0"`).
+- `requires_flag` denials' `feature` is always a String.
+- README: the header, results, roadmap and health-check notes describe
+  0.2.2 rather than 0.1.0.
+
+### Removed
+
+- `StandardFlags::Operations::SCOPES`, an unused constant. The scopes are
+  the strings `config.authorize` receives.
+
 ## [0.2.2] - 2026-11-23
 
 ### Changed

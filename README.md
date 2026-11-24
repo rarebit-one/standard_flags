@@ -8,10 +8,14 @@ guards, environment pins, then per-environment code defaults. Results have
 the [OpenFeature](https://openfeature.dev) shape (value, variant, reason,
 error code), so "why is this on?" is always a one-line answer.
 
-This is version 0.1.0 (Phase 1): registry, ENV layer and evaluation API. It
-needs no database tables. Unreleased on `main`: opt-in
-[runtime rules](#runtime-rules) stored in the app's own database (the read
-path; the audited write operations come next). See [Roadmap](#roadmap).
+This is version 0.2.2: the registry, ENV layer and evaluation API (which
+need no database tables), plus opt-in [runtime rules](#runtime-rules) stored
+in the app's own database, the audited operations that change them,
+[operator tools](#operator-tools-mcp), an admin page generator and an
+[OpenFeature](#openfeature) provider. Unreleased on `main`:
+[client context](#client-context) (who is calling, from request headers),
+portable version ranges, build-number conditions, a raisable
+`FeatureDisabled` and flag-gated MCP tools. See [Roadmap](#roadmap).
 
 - [Install](#install)
 - [Declaring flags](#declaring-flags)
@@ -21,6 +25,7 @@ path; the audited write operations come next). See [Roadmap](#roadmap).
 - [Environment variables](#environment-variables)
 - [Sensor rollouts](#sensor-rollouts)
 - [Controller and job guards](#controller-and-job-guards)
+- [Client context](#client-context)
 - [Client payload](#client-payload)
 - [Rake tasks](#rake-tasks)
 - [Observability](#observability)
@@ -209,7 +214,7 @@ also carry an environment override and client attributes
 - `variant`: the value as a string (`"on"`/`"off"` for booleans).
 - `reason`: `STATIC`, `DEFAULT`, `TARGETING_MATCH`, `SPLIT`, `DISABLED`, `ERROR`, plus `ENV_PIN` and `KILL_SWITCH`.
 - `error_code`: the OpenFeature set (`FLAG_NOT_FOUND`, `PARSE_ERROR`, `TYPE_MISMATCH`, `TARGETING_KEY_MISSING`, `INVALID_CONTEXT`, `PROVIDER_NOT_READY`, `PROVIDER_FATAL`, `GENERAL`), only when the reason is `ERROR`.
-- `rule_id`: the matching runtime rule. Always nil in 0.1.0.
+- `rule_id`: the part of a runtime rule that decided (`allow`, `deny`, `cohort:<key>`, `segment:<name>`, `percentage`, `variants`, `fallthrough`, `stopped`), or nil when no runtime rule did.
 - `source_env_var`: the name of the variable that decided the value. Never its contents.
 
 ### Errors and strictness
@@ -265,7 +270,8 @@ Runtime rules change a flag without a redeploy, and let it differ per
 account, organisation, phone or other unit. Each flag has at most one rule,
 stored in the app's own database (Postgres). They are off by default: with
 `config.runtime_rules` false, nothing reads a database, ActiveRecord is never
-loaded by the gem, and every flag behaves exactly as in 0.1.0.
+loaded by the gem, and every flag is decided by the test override, guards,
+ENV pin and code default alone.
 
 Rules change only through audited operations (see
 [Changing flags](#changing-flags)), from the console, a rake task, or the
@@ -334,10 +340,11 @@ The rule's status decides first:
    wins; otherwise the first match in declared order. Rule `cohort:<key>`.
 3. **Segments**, each asked of `config.segment_resolver.call(name,
    context)` in order. Skipped when no resolver is set. Rule `segment:<name>`.
-4. **Client conditions**: `platforms` and `versions` (`{ "android" =>
-   ">= 1.4.0" }`, compared with `Gem::Requirement` against
-   `context.client[:platform]` and `[:version]`). When they aren't met, the
-   rule skips straight to the fallthrough.
+4. **Client conditions**: `platforms`, `versions` (`{ "android" =>
+   ">=1.4.0 <2.0.0" }`) and `builds` (`{ "android" => ">=120" }`), checked
+   against the context's [client](#client-context). Every condition set for
+   the client's platform must hold. When they aren't met, the rule skips
+   straight to the fallthrough. See [Versions and ranges](#versions-and-ranges).
 5. **Percentage and variants.** A unit whose rollout bucket is below
    `percentage_bps` gets `rollout_value` (on/off kinds default to `on`), reason
    `SPLIT`, rule `percentage`. With `variant_weights` (summing to 10,000),
@@ -357,7 +364,7 @@ the fallthrough or the code default with reason `ERROR` and error code
 `TARGETING_KEY_MISSING`. That emits `targeting_key_missing.standard_flags`
 but reports nothing, because reads with no unit are often legitimate. A
 stored value the flag can't take (an unknown mode value, weights that don't
-sum, a bad version range) fails only that flag: its `fail:` value with
+sum, a bad version or build range) fails only that flag: its `fail:` value with
 `PARSE_ERROR`, reported once through the error reporter.
 
 ### What a read costs
@@ -520,7 +527,7 @@ leaves a draft a draft, so changes can be staged and started together.
 | `Ramp(bps:, value: nil)` | `flags:ramp` | Sets the percentage (0–10,000 basis points) and, for modes and experiments, the value it serves. At 10,000 it records `full_since`. |
 | `SetVariants(weights:)` | `flags:ramp` | Weights over the flag's variants or mode values, summing to 10,000. `{}` clears them. |
 | `SetValue(value:)` | `flags:write` | The fallthrough value, served to every unit nothing else matched. Moves a mode off → sensor → on and throws a kill switch. Starts a draft rule (above); a paused one stays paused, with a warning. `nil` clears it. |
-| `SetConditions(platforms:, versions:, segments:)` | `flags:write` | Replaces the conditions; omitted ones are cleared. |
+| `SetConditions(platforms:, versions:, builds:, segments:)` | `flags:write` | Replaces the conditions; omitted ones are cleared. Version ranges are stored in the neutral syntax. |
 | `AddMembers(keys:, value:, unit:, expires_at:)` | `flags:write` | Adds units (records or keys) to a rule or a cohort. Adding an existing member with a new value or expiry keeps the old row as removed and adds a new one, so [Restore](#restore) can read it back; adding it unchanged writes nothing. |
 | `RemoveMembers(keys:, unit:)` | `flags:write` | Removes them (soft delete, see retention below). |
 | `CreateCohort(unit:, name:, description:)` / `ArchiveCohort` | `flags:write` | Named member lists of one unit. Archiving needs the cohort detached everywhere. |
@@ -822,6 +829,44 @@ end
   own copy holding that call's actor, arguments and store read.
 - A missing `actor:` falls back to `config.actor_resolver`. The generated
   admin page never relies on that (below).
+- `list_flags` and `get_flag` evaluate with no client unless the tools are
+  built with one: `StandardFlags::MCP.tools(client: ...)` takes a
+  `StandardFlags::Client`, a Hash or a lambda (which may take the actor).
+
+### Gating your own tools
+
+An app's own tools can require flags. Include `StandardFlags::MCP::Gated`
+in any tool class with the same shape (`name`, `description`,
+`input_schema`, `call(arguments, actor:)`):
+
+```ruby
+class SummariseThread
+  include StandardFlags::MCP::Gated
+
+  requires_flag :ai_assistant                                    # evaluated for the actor
+  requires_flag :thread_tools, for: ->(actor) { actor.account }, client: -> { Current.client }
+
+  def name = "summarise_thread"
+  # description, input_schema, call(arguments, actor:) ...
+end
+```
+
+While a required flag is off, `call` returns
+`{ "error" => { "code" => "feature_disabled", "message" => "threadTools is disabled" } }`
+without running the tool (the message names the wire name, as a controller
+denial does), and `StandardFlags::MCP.visible` leaves the tool out of
+`tools/list`:
+
+```ruby
+server.on_list_tools do |user|
+  StandardFlags::MCP.visible(app_tools + StandardFlags::MCP.tools, actor: user)
+end
+```
+
+`visible(tools, actor:, context: nil, client: nil)` evaluates each gate as
+its `call` would; `context:` replaces every gate's `for:`, and `client:`
+every gate's `client:`. Ungated tools always appear. The gem's own tools are
+not gated.
 
 ## Admin page
 
@@ -1009,6 +1054,39 @@ The denial carries `key`, `error`, `status` (from `error:`/`status:`),
 `feature` and `body` (the default JSON:API document). The responder must
 render or redirect so the action doesn't run.
 
+### Raising FeatureDisabled
+
+Code deeper than a `before_action` can raise the same denial:
+
+```ruby
+StandardFlags.require!(:ai_assistant, for: Current.account)   # raises StandardFlags::FeatureDisabled when off
+raise StandardFlags::FeatureDisabled.new(:ai_assistant)         # or raise it yourself
+```
+
+`StandardFlags::FeatureDisabled` (a `StandardFlags::Error`) carries `key`,
+`feature` (the wire name, found as for `meta.feature`) and `status` (403
+unless given). `StandardFlags::Controller` rescues it and renders it exactly
+like a `requires_flag :key` denial: through `config.controller_responder`
+when one is set, else the JSON:API body above.
+
+An app whose API already has its own error envelope renders every denial,
+from guards and from the exception alike, with one responder:
+
+```ruby
+StandardFlags.configure do |config|
+  config.controller_responder = lambda do |controller, denial|
+    controller.render json: { error: { code: denial.error.to_s.upcase, feature: denial.feature } },
+                      status: denial.status
+  end
+end
+# => 403 {"error":{"code":"FEATURE_DISABLED","feature":"assistant"}}
+```
+
+Keep client-facing denials in the 4xx range. Some hosting edges and proxies
+replace 5xx response bodies with their own error page, so a client may
+never see a 503's body; 4xx bodies pass through. `status: 503` still works
+for server-to-server endpoints that only read the status.
+
 ```ruby
 class ReplyJob < ApplicationJob
   include StandardFlags::Job
@@ -1020,6 +1098,14 @@ end
 
 With `retry: true` a disabled flag raises `StandardFlags::Disabled` so
 `retry_on` can reschedule. Without it the job is discarded unrun.
+
+`client:` evaluates the flag for a client as well (a `StandardFlags::Client`,
+a Hash, or a lambda run in the job instance). Jobs never read request
+headers; pass along the client the request saw (`client.to_h` serialises):
+
+```ruby
+requires_flag :new_importer, for: -> { arguments.first }, client: -> { arguments.second }
+```
 
 Jobs that already `retry_on` (or `discard_on`) their own exception can
 raise it instead with `error:`, a class or a proc:
@@ -1047,6 +1133,105 @@ options combine:
 | `error: SomeError` | Raises `SomeError`; the job's own `retry_on`/`discard_on` for it applies, and without one the job fails like any other error. |
 | `error:` with `retry: true` | Same as `error:` alone. |
 | `error:` with `retry: false` | `ArgumentError` at declaration: `error:` always raises, so it cannot also discard. |
+
+## Client context
+
+Clients (mobile apps, desktop apps, devices, browsers) say who they are on
+every request with three headers:
+
+```
+X-Client-Platform: android
+X-Client-Version: 1.4.0
+X-Client-Build: 381
+```
+
+`StandardFlags::Controller` reads them once per request into
+`standard_flags_client`, a `StandardFlags::Client`, and evaluates every
+guard and payload for `standard_flags_context` plus that client. If your
+`standard_flags_context` returns a context that already has a client, it is
+kept.
+
+```ruby
+client = StandardFlags::Client.from_headers(request.headers)
+client.platform  # => "android"
+client.version   # => #<StandardFlags::Version 1.4.0>
+client.build     # => 381
+```
+
+- **Platform** is downcased and must be one of `config.client_platforms`
+  (default `%w[android ios web desktop]`).
+- **Version** must parse as a [version](#versions-and-ranges).
+- **Build** must be a non-negative integer.
+
+A value that fails is dropped, as if the header were missing, and emits
+`client_invalid.standard_flags` (with the field and header name, never the
+value). Nothing raises and nothing is reported as an error, because the
+headers come from outside. A request with none of the headers gets an empty
+client, which runtime rules treat as an unknown build: it meets no version
+or build range, so behaviour is exactly as before the headers existed.
+
+```ruby
+StandardFlags.configure do |config|
+  config.client_headers = { platform: "X-App-Platform", version: "X-App-Version", build: "X-App-Build" }
+  config.client_platforms = %w[android ios]
+  config.read_client_headers = false   # opt out: controllers never read the headers
+end
+```
+
+Outside a controller, pass a client explicitly. Nothing else reads headers.
+
+```ruby
+StandardFlags.on?(:new_checkout, for: StandardFlags::Context.wrap(account, client: client))
+StandardFlags.on?(:new_checkout, for: StandardFlags::Context.new(actors: { account: account },
+                                                                 client: { platform: "ios", version: "2.1.0" }))
+```
+
+`Context.new(client:)` still takes the Hash form, which keeps its values as
+given (no allowlist): `context.client[:platform]` reads them, and the typed
+readers (`platform`, `version`, `build`) parse them. Jobs and MCP tools take
+`client:` too (see [Controller and job guards](#controller-and-job-guards)
+and [Operator tools](#operator-tools-mcp)).
+
+### Versions and ranges
+
+`StandardFlags::Version` is SemVer 2.0: `MAJOR.MINOR.PATCH`, an optional
+`-prerelease` and an ignored `+build`. The shorthands `MAJOR.MINOR` and
+`MAJOR` mean the missing parts are 0 (`1.4` is `1.4.0`); they take no
+suffix. Ordering is SemVer precedence: a prerelease sorts before its release
+(`1.4.0-rc.1 < 1.4.0`), numeric prerelease identifiers compare by value and
+below alphanumeric ones, and build metadata never counts
+(`1.4.0+381 == 1.4.0`). `v1.4`, `1.4.0.1` and leading zeros don't parse.
+
+Version ranges are comparators (`>=`, `>`, `<=`, `<`, `=`) separated by
+spaces, all of which must hold, with optional `||` alternatives.
+Whitespace after an operator is optional:
+
+```
+>=1.4.0 <2.0.0
+>=0.9.0 || =0.8.5-beta.1
+>= 1.4 < 2
+```
+
+The syntax is deliberately small so the Kotlin and TypeScript clients can
+implement it; `version_ranges.json` in the [conformance suite](#conformance-suite)
+pins its meaning. Comparison is plain ordering, so `<2.0.0` admits
+`2.0.0-beta.1`. A client version that doesn't parse meets no range.
+
+Build ranges use the same comparators over integers: `>=120 <200`. A rule's
+`builds` sit beside its `versions`, per platform, and both must hold:
+
+```ruby
+StandardFlags::Operations::SetConditions.call(:new_checkout, actor: admin, reason: "needs the new SDK",
+  platforms: %w[android ios], versions: { android: ">=1.4.0" }, builds: { android: ">=120" })
+```
+
+Ranges written with 0.2.x used RubyGems syntax (`">= 1.4.0"`, `"~> 1.4"`,
+`">= 1.4, < 2"`). Stored ones keep evaluating as before: they are
+translated when read (`~> 1.4` → `>=1.4.0 <2.0.0`, `~> 1.4.2` →
+`>=1.4.2 <1.5.0`, `!= 1.5` → `<1.5.0 || >1.5.0`). `SetConditions` accepts
+either syntax and stores the neutral one (a range already in the neutral
+syntax is stored as given). `StandardFlags::VersionRange.translate` converts
+one by hand.
 
 ## Client payload
 
@@ -1140,14 +1325,8 @@ those environments whenever they pin the flag on. Other pins are optional,
 which the env spec has no level for, so they aren't declared. The app's own
 `env_spec` entry for a name wins.
 
-On older standard_health, or without `register_default_checks`, register it
-yourself:
-
-```ruby
-StandardHealth.configure do |c|
-  c.register_check :flags, StandardFlags::HealthCheck
-end
-```
+Without `register_default_checks` (or on standard_health older than 0.9),
+register it by hand: `c.register_check :flags, StandardFlags::HealthCheck`.
 
 The check fails when a `forbidden_in` flag is pinned on, or when runtime
 rules are on and their tables are missing. It warns on unparseable pins,
@@ -1346,7 +1525,13 @@ Kotlin or TypeScript client, say) run the same files, so they cannot drift
 from the server on what a flag evaluates to. `runtime/*.json` adds runtime
 rules: each case's rule, cohorts and memberships plus a context (unit keys,
 client, segments) in; value, variant, reason, error code and `rule_id` out,
-including the v1 and v2 bucket boundaries.
+including the v1 and v2 bucket boundaries. `runtime/client.json` covers
+client conditions: neutral and RubyGems version ranges, prerelease ordering,
+shorthand versions and build ranges.
+
+`versions/version_ranges.json` is for clients: a version and a range in,
+`matched` true or false out, plus ranges every implementation must refuse.
+It uses only the neutral syntax.
 
 ## Bucketing
 
@@ -1368,15 +1553,20 @@ every vector.
 
 ## Roadmap
 
-Phase 2 adds runtime rules stored in the database (changes without a
-redeploy, allow and deny lists, cohorts, sticky percentage rollouts with
-per-flag salts), audited write operations and an admin generator. The read
-path, the operations, the rake tasks, the MCP tools, the admin generator
-and `flags:restore` are done; an OpenFeature provider comes next. Phase 3
-adds client delivery: an OpenFeature remote-evaluation (OFREP) endpoint,
-client version targeting, a minimum-version endpoint and the manifest
-contract checked in client CI. Phase 4 adds experiment exposure tracking and
-staged rollout plans with automatic halts.
+Phase 1 (0.1.0) shipped the registry, the ENV layer and the evaluation API.
+Phase 2 (0.2.x) shipped runtime rules stored in the database (allow and
+deny lists, cohorts, segments, client conditions, sticky percentage rollouts
+and variants), the audited write operations and rake tasks, the MCP
+operator tools, the admin generator, `flags:restore` and the OpenFeature
+provider.
+
+Phase 3 is client delivery. On `main` now: client context from request
+headers, portable version ranges, build conditions, `FeatureDisabled` and
+gated MCP tools. Next: an OpenFeature remote-evaluation (OFREP) endpoint and
+an embeddable payload with ETags, minimum client versions and an upgrade
+endpoint, and the manifest contract checked in client CI. Phase 4 adds
+experiment exposure tracking and staged rollout plans with automatic
+halts.
 
 ## License
 

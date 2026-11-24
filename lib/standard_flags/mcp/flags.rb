@@ -37,7 +37,7 @@ module StandardFlags
       end
 
       def summary(definition)
-        evaluation = Evaluator.evaluate(registry, definition.key, Context.empty)
+        evaluation = Evaluator.evaluate(registry, definition.key, evaluation_context)
         rule = rule_for(definition.key)
         {
           key: definition.key, kind: definition.kind, owner: definition.owner, description: definition.description,
@@ -95,12 +95,12 @@ module StandardFlags
         if args.key?("unit") && args["unit"].to_s != definition.unit.to_s
           raise ToolError.new(:invalid_arguments, "unit #{args['unit'].inspect} is not :#{definition.key}'s unit (#{definition.unit.inspect})")
         end
-        return [ Evaluator.evaluate(registry, definition.key, Context.empty), nil ] unless args.key?("unit_key")
+        return [ Evaluator.evaluate(registry, definition.key, evaluation_context), nil ] unless args.key?("unit_key")
         raise ToolError.new(:invalid_arguments, ":#{definition.key} has no unit, so it can't be evaluated per unit") unless definition.unit
 
         check_probe!(definition, args)
         key = unit_key(definition, args["unit_key"])
-        evaluation = Evaluator.evaluate(registry.with_unit_key(definition.unit, key), definition.key, Context.empty)
+        evaluation = Evaluator.evaluate(registry.with_unit_key(definition.unit, key), definition.key, evaluation_context)
         audit_probe(definition, args)
         [ evaluation, MCP.mask(key) ]
       end

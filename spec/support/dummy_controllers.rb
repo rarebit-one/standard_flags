@@ -69,3 +69,43 @@ class LegacyController < DummyBaseController
     render plain: "unavailable: #{denial.feature} (#{denial.status})", status: denial.status
   end
 end
+
+# Client context and FeatureDisabled.
+class ClientFeaturesController < ActionController::Base
+  include StandardFlags::Controller
+
+  def index
+    render json: { features: standard_flags_payload(:mobile), client: standard_flags_client.to_h }
+  end
+
+  def checkout
+    StandardFlags.require!(:new_checkout, for: standard_flags_request_context)
+    render plain: "checkout"
+  end
+
+  def raise_disabled
+    raise StandardFlags::FeatureDisabled.new(:new_checkout, status: 404)
+  end
+
+  private
+
+  def standard_flags_context
+    { account: "acct_1" }
+  end
+end
+
+class PinnedClientController < ActionController::Base
+  include StandardFlags::Controller
+
+  requires_flag :new_checkout
+
+  def index
+    render plain: "pinned"
+  end
+
+  private
+
+  def standard_flags_context
+    StandardFlags::Context.new(actors: { account: "acct_1" }, client: { platform: "ios", version: "9.0.0" })
+  end
+end

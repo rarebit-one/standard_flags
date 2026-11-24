@@ -15,7 +15,8 @@ module StandardFlags
     #   2. attached cohorts the unit belongs to; one serving the off value
     #      wins, else the first in declared order ("cohort:<key>");
     #   3. segments, asked of `config.segment_resolver` ("segment:<name>");
-    #   4. client conditions (platforms, version ranges); when unmet, skip
+    #   4. client conditions (platforms, version and build ranges for the
+    #      client's platform, all of which must hold); when unmet, skip
     #      straight to the fallthrough;
     #   5. the percentage: a unit whose rollout bucket is below
     #      `percentage_bps` gets the variant weights' pick when there are
@@ -160,26 +161,27 @@ module StandardFlags
         def client_conditions_met?
           platforms = rule.platforms
           versions = rule.versions
-          return true if platforms.empty? && versions.empty?
+          builds = rule.builds
+          return true if platforms.empty? && versions.empty? && builds.empty?
 
-          platform = context.client[:platform]&.to_s&.downcase
+          client = context.client
+          platform = client.platform
           return false if platforms.any? && !platforms.include?(platform)
+          return true if platform.nil?
 
-          requirement = platform && versions[platform]
-          requirement.nil? || version_satisfies?(requirement, context.client[:version])
+          in_range?(VersionRange, versions[platform], client.version) && in_range?(BuildRange, builds[platform], client.build)
         end
 
-        def version_satisfies?(requirement, version)
-          parsed = begin
-            Gem::Requirement.new(*requirement.to_s.split(",").map(&:strip))
-          rescue Gem::Requirement::BadRequirementError
-            raise Invalid, "has an invalid version range #{requirement.inspect}"
-          end
-          return false if version.to_s.strip.empty?
+        # A missing range is met; a client value that's missing (or didn't
+        # parse) meets no range; a stored range that doesn't parse fails the
+        # flag.
+        def in_range?(kind, stored, value)
+          return true if stored.nil?
 
-          parsed.satisfied_by?(Gem::Version.new(version.to_s.strip))
-        rescue ArgumentError
-          false # an unparseable client version meets no range
+          range = kind.parse(stored.to_s)
+          raise Invalid, "has an invalid #{kind == BuildRange ? 'build' : 'version'} range #{stored.inspect}" unless range
+
+          !value.nil? && range.satisfied_by?(value)
         end
 
         def split(key)
