@@ -45,6 +45,31 @@ RSpec.describe StandardFlags::MCP do
     end
   end
 
+  describe "the gate's cost" do
+    def readers_per_call(tool)
+      count = 0
+      allow(StandardFlags).to receive(:reader).and_wrap_original { |original, **kwargs| (count += 1) && original.call(**kwargs) }
+      tool.call({}, actor: operator)
+      count
+    end
+
+    it "is one evaluation per call, however deep the subclasses that call super" do
+      rule!
+      parent = tool_class { requires_flag :summaries }
+      deepest = (1..4).reduce(parent) { |klass, _| Class.new(klass) { def call(arguments, actor:) = super } }
+      expect([ readers_per_call(parent.new), readers_per_call(deepest.new) ]).to eq([ 1, 1 ])
+      expect(deepest.new.call({}, actor: operator)).to eq("ran" => 7)
+      expect(StandardFlags::MCP::Gated::PASSED_KEY.then { |key| ActiveSupport::IsolatedExecutionState[key] }).to eq([])
+    end
+
+    it "still gates another tool called from inside a tool" do
+      rule!(fallthrough_value: "off", percentage_bps: 0)
+      inner = tool_class { requires_flag :summaries }.new
+      outer = Class.new { def initialize(inner) = (@inner = inner); def call(_arguments, actor:) = @inner.call({}, actor: actor) }.new(inner)
+      expect(described_class.call(outer, {}, actor: operator).dig("error", "code")).to eq("feature_disabled")
+    end
+  end
+
   describe "listing and calling" do
     let(:gated) { tool_class { requires_flag :summaries, for: ->(actor) { { account: actor.account } } }.new }
     let(:old_ios) { { platform: "ios", version: "1.0.0" } }

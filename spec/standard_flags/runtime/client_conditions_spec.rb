@@ -77,6 +77,11 @@ RSpec.describe StandardFlags::Runtime::Resolver, registry: RuntimeHelpers::REGIS
       expect([ Gem::Version.new("1.4.2"), 1.5 ].map { |v| evaluate(platform: "android", version: v).rule_id }).to all(eq("percentage"))
     end
 
+    it "ignores build metadata in a client version, as SemVer does (0.2.2 refused it)" do
+      with_rule(:new_checkout, percentage: 10_000, fallthrough: false, versions: { android: "~> 1.4" })
+      expect(evaluate(platform: "android", version: "1.4.0+381").rule_id).to eq("percentage")
+    end
+
     it "evaluates a stored range the neutral syntax can't hold through RubyGems, not as an error" do
       with_rule(:new_checkout, percentage: 10_000, fallthrough: false, versions: { android: "~> 1.4.2.1" })
       expect(%w[1.4.2.1 1.4.2.9 1.4.3].map { |v| evaluate(platform: "android", version: v).rule_id })

@@ -13,6 +13,19 @@ RSpec.describe "version range conformance fixtures" do
       expect(range).not_to be_nil
       expect(range.satisfied_by?(example["version"])).to eq(example.fetch("matched"))
     end
+
+    # The server's read path (VersionRange.parse, as runtime rules use it)
+    # agrees with clients except where a case says otherwise.
+    server = example.fetch("server_matched", example.fetch("matched"))
+    it "#{example['version'].inspect} against #{example['range'].inspect} is #{server ? 'matched' : 'not matched'} on the server" do
+      expect(StandardFlags::VersionRange.parse(example.fetch("range")).satisfied_by?(example["version"])).to eq(server)
+    end
+  end
+
+  it "marks every case where the server and clients differ" do
+    marked = fixture.fetch("cases").select { |example| example.key?("server_matched") }
+    expect(marked.map { |example| example["server_matched"] == example["matched"] }).to all(be(false))
+    expect(marked.size).to eq(5)
   end
 
   fixture.fetch("invalid_ranges").each do |text|

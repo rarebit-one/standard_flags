@@ -16,16 +16,20 @@ module StandardFlags
   # `1.4.5`). A version that doesn't parse satisfies no neutral range.
   #
   # Ranges stored by 0.2.x are RubyGems requirements (`">= 1.4.0"`,
-  # `"~> 1.4"`, `">= 1.4, < 2"`), and `parse` keeps reading them exactly as
-  # RubyGems does. Where one has a neutral equivalent it is translated:
+  # `"~> 1.4"`, `">= 1.4, < 2"`), and `parse` keeps reading the ones only
+  # RubyGems can read exactly as RubyGems does. Where one has a neutral
+  # equivalent it is translated:
   # `~> 1.4` reads as `>=1.4.0 <2.0.0-0`, `~> 1.4.2` as `>=1.4.2 <1.5.0-0`,
   # `!= 1.5` as `<1.5.0 || >1.5.0`. The `-0` is the lowest prerelease SemVer
   # allows, so `<2.0.0-0` excludes `2.0.0-beta.1` too, as RubyGems' `~>`
   # (which compares the release part only) does. A requirement the neutral
-  # syntax can't express (`>= 1.4.0.1`) is still evaluated with
-  # Gem::Requirement, and so is any range RubyGems can read when the client
-  # version isn't SemVer (`1.4.0.1`, `1.4.0.beta`), as 0.2.2 did. Only the
-  # neutral syntax is portable; the write path stores it when it can.
+  # syntax can't express (`>= 1.4.0.1`, or any prerelease operand such as
+  # `>= 1.4.0.beta`, which RubyGems orders differently) is still evaluated
+  # with Gem::Requirement, and so is any range RubyGems can read when the
+  # client version isn't SemVer (`1.4.0.1`, `1.4.0.beta`), as 0.2.2 did. A
+  # string valid in both syntaxes (`>= 1.4.0`, `>= 1.0.0-alpha`) is neutral:
+  # a SemVer client version is compared by SemVer. Only the neutral syntax
+  # is portable; the write path stores it when it can.
   class VersionRange
     class Invalid < StandardFlags::Error; end
 
@@ -170,9 +174,14 @@ module StandardFlags
       end
 
       # The alternatives (each a list of comparator strings) one RubyGems
-      # term means.
+      # term means, or nil when SemVer can't say the same: a prerelease
+      # operand, which RubyGems orders differently (it reads a client's
+      # `1.4.0-beta` as `1.4.0.pre.beta`), or more than three release
+      # segments.
       def legacy_term(term)
         match = Gem::Requirement::PATTERN.match(term)
+        return nil if Gem::Version.new(match[2]).prerelease?
+
         operator = match[1] || "="
         version = legacy_version(match[2])
         return nil unless version
@@ -186,21 +195,15 @@ module StandardFlags
         end
       end
 
-      # A RubyGems version as SemVer: "1.4" → "1.4.0", "1.4.0.beta.1" →
-      # "1.4.0-beta.1". nil past three non-zero release segments, which
-      # SemVer can't hold.
+      # A RubyGems release version as SemVer: "1.4" → "1.4.0", "1.4.0.0" →
+      # "1.4.0". nil past three non-zero release segments, which SemVer
+      # can't hold.
       def legacy_version(text)
-        direct = Version.parse(text)
-        return direct.to_s if direct
-
-        segments = Gem::Version.new(text).segments
-        release = segments.take_while { |segment| segment.is_a?(Integer) }
-        prerelease = segments.drop(release.size)
+        release = Gem::Version.new(text).segments
         release.pop while release.size > 3 && release.last.zero?
         return nil if release.size > 3
 
-        release += [ 0 ] * (3 - release.size)
-        Version.parse([ release.join("."), *(prerelease.empty? ? [] : [ prerelease.join(".") ]) ].join("-"))&.to_s
+        Version.parse((release + ([ 0 ] * (3 - release.size))).join("."))&.to_s
       end
     end
 

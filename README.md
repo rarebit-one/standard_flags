@@ -871,7 +871,8 @@ tools = app_tools + StandardFlags::MCP.tools
 
 server.on_list_tools { |user| StandardFlags::MCP.visible(tools, actor: user, client: client) }
 server.on_call_tool do |user, name, arguments|
-  StandardFlags::MCP.call(tools.find { |tool| tool.name == name }, arguments, actor: user, client: client)
+  tool = tools.find { |candidate| candidate.name == name } or raise UnknownTool, name
+  StandardFlags::MCP.call(tool, arguments, actor: user, client: client)
 end
 ```
 
@@ -1281,21 +1282,31 @@ StandardFlags::Operations::SetConditions.call(:new_checkout, actor: admin, reaso
 ```
 
 Ranges written with 0.2.x used RubyGems syntax (`">= 1.4.0"`, `"~> 1.4"`,
-`">= 1.4, < 2"`). Stored ones keep evaluating exactly as `Gem::Requirement`
-evaluates them, prerelease client versions included:
+`">= 1.4, < 2"`). Stored ones that only RubyGems can read keep evaluating
+exactly as `Gem::Requirement` evaluates them, prerelease client versions
+included. A string valid in both syntaxes (`">= 1.4.0"`,
+`">= 1.0.0-alpha"`) is read as neutral, so a SemVer client version is
+compared by SemVer (for release operands the answer is the same).
 
 - One with a neutral equivalent is translated: `~> 1.4` reads as
   `>=1.4.0 <2.0.0-0`, `~> 1.4.2` as `>=1.4.2 <1.5.0-0`, and `!= 1.5` as
   `<1.5.0 || >1.5.0`. The `-0` is SemVer's lowest prerelease, so
   `<2.0.0-0` excludes `2.0.0-beta.1` as well as `2.0.0`, matching RubyGems,
   whose `~>` compares only the release part.
-- One the neutral syntax can't hold (`>= 1.4.0.1`, or more than 64
-  alternatives' worth of `!=`) is evaluated with `Gem::Requirement` and
-  doesn't block operations on the rule.
+- One the neutral syntax can't hold is evaluated with `Gem::Requirement` and
+  doesn't block operations on the rule. That covers more than three release
+  segments (`>= 1.4.0.1`), more than 64 alternatives' worth of `!=`, and any
+  prerelease operand (`= 1.4.0.beta`, `~> 2.0.0.pre`), because RubyGems
+  orders prereleases differently from SemVer: it reads a client's
+  `1.4.0-beta` as `1.4.0.pre.beta`.
 - A client version outside SemVer (`1.4.0.1`, `1.4.0.beta`, passed in the
   Hash form; headers require SemVer) is read by RubyGems against any range
-  RubyGems can read, `">= 1.4.0"` included, as 0.2.2 did. Ranges only the
-  neutral syntax can read compare SemVer only.
+  RubyGems can read, `">= 1.4.0"` and `">=0.0.0"` included, as 0.2.2 did.
+  This is the one place the server and the portable fixture differ (see
+  [Conformance suite](#conformance-suite)). Ranges only the neutral syntax
+  can read compare SemVer only.
+- Build metadata in a client version is ignored, as SemVer says: a Hash-form
+  `version: "1.4.0+381"` meets `~> 1.4`, where 0.2.2 refused it.
 
 `SetConditions` accepts either syntax and stores the neutral form: a
 neutral range as given, a RubyGems one translated, and one the neutral
@@ -1603,7 +1614,13 @@ the Ruby server keeps; other evaluators skip them.
 `versions/version_ranges.json` is for clients: a version and a range in,
 `matched` true or false out, the same for build numbers, plus ranges every
 implementation must refuse, with the length and whitespace limits in its
-description. It uses only the neutral syntax.
+description. It uses only the neutral syntax. The Ruby suite runs every case
+through both the client reading (`VersionRange.neutral`) and the server's
+read path. The five cases marked `server_matched` are where they differ: the
+server reads a client version that isn't SemVer (`1.4.0.1`) through RubyGems
+against a range RubyGems can also read (`>=0.0.0`), for 0.2.2
+compatibility. That only applies to versions an app passes in a context's
+client Hash, since client headers drop versions that aren't SemVer.
 `versions/legacy_ranges.json` (`"scope": "server"`) pins how RubyGems
 ranges stored by 0.2.x translate and evaluate, against `Gem::Requirement`.
 

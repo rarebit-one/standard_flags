@@ -41,6 +41,10 @@ module StandardFlags
       # progress.
       Scope = Data.define(:context, :client)
       SCOPE_KEY = :standard_flags_mcp_scope
+      # The tools whose gate already passed in the calls in progress, so a
+      # subclass's `call` reaching its parent's through `super` doesn't
+      # evaluate the gate again.
+      PASSED_KEY = :standard_flags_mcp_passed
       AUDIENCE = :mcp
 
       def self.included(base)
@@ -95,14 +99,24 @@ module StandardFlags
         end
       end
 
-      # Runs before the tool's own `call`.
+      # Runs before the tool's own `call`, once per call: every subclass
+      # has one (so a subclass's own `call` can't skip it), and the ones a
+      # call reaches through `super` see that the gate already passed.
       module Guard
         def call(*arguments, **options, &block)
+          passed = ActiveSupport::IsolatedExecutionState[PASSED_KEY] || []
+          return super if passed.any? { |tool| tool.equal?(self) }
+
           scope = Gated.scope
           disabled = standard_flags_disabled(actor: options[:actor], context: scope&.context, client: scope&.client)
           return MCP.feature_disabled(disabled) if disabled
 
-          super
+          begin
+            ActiveSupport::IsolatedExecutionState[PASSED_KEY] = passed + [ self ]
+            super
+          ensure
+            ActiveSupport::IsolatedExecutionState[PASSED_KEY] = passed
+          end
         rescue FeatureDisabled => e
           MCP.feature_disabled(e)
         end

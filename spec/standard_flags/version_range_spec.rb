@@ -57,8 +57,7 @@ RSpec.describe StandardFlags::VersionRange do
     {
       ">= 1.4.0" => ">=1.4.0", "~> 1.4" => ">=1.4.0 <2.0.0-0", "~> 1.4.2" => ">=1.4.2 <1.5.0-0", "~> 1" => ">=1.0.0 <2.0.0-0",
       ">= 1.4, < 2" => ">=1.4.0 <2.0.0", "!= 1.5" => "<1.5.0 || >1.5.0", ">= 1.0, != 1.5" => ">=1.0.0 <1.5.0 || >=1.0.0 >1.5.0",
-      "1.4.0" => "=1.4.0", "= 1.4" => "=1.4.0", "" => ">=0.0.0", ">= 1.2.3.0" => ">=1.2.3",
-      "~> 1.4.0.beta" => ">=1.4.0-beta <1.5.0-0", "1.4.0.beta.1" => "=1.4.0-beta.1", ">= 1.4.0-rc.1" => ">=1.4.0-rc.1"
+      "1.4.0" => "=1.4.0", "= 1.4" => "=1.4.0", "" => ">=0.0.0", ">= 1.2.3.0" => ">=1.2.3"
     }.each do |legacy, translation|
       it "reads #{legacy.inspect} as #{translation}" do
         expect(range(legacy).to_s).to eq(translation)
@@ -66,16 +65,32 @@ RSpec.describe StandardFlags::VersionRange do
       end
     end
 
-    it "evaluates exactly as RubyGems does, prerelease and non-SemVer client versions included" do
+    it "evaluates exactly as RubyGems does, prerelease operands and client versions included" do
       requirements = [ ">= 1.4.0", "~> 1.4", "~> 1.4.2", "~> 1.4.0", ">= 1.4, < 2", "!= 1.5", "> 1.0, <= 3", "1.4.0", "< 2",
-                       "~> 1.4, != 1.5.0", ">= 1.4.0.1", "~> 1.4.2.1", Array.new(7) { |i| "!= 1.#{i}" }.join(", ") ]
-      versions = %w[0.9.0 1.3.9 1.4.0-rc.1 1.4.0 1.4.0.1 1.4.1 1.4.2-beta 1.4.2 1.4.2.1 1.4.2.5 1.4.9 1.5.0-beta 1.5.0 1.9.9
-                    1.9.9-rc.1 2.0.0-0 2.0.0-beta.1 2.0.0-rc1 2.0.0 3.0.0 3.0.1 1.4.0.beta 01.4.0]
+                       "~> 1.4, != 1.5.0", ">= 1.4.0.1", "~> 1.4.2.1", Array.new(7) { |i| "!= 1.#{i}" }.join(", "),
+                       "= 1.4.0.beta", ">= 1.4.0.beta", "~> 2.0.0.pre", ">= 1.4-beta", "~> 1.4.0-beta", ">= 1.4.0-rc.1, < 2",
+                       "1.4.0.beta.1", "< 2.0.0.a", "!= 1.4.0.pre.beta" ]
+      versions = %w[0.9.0 1.3.9 1.4.0-alpha 1.4.0-beta 1.4.0-beta.1 1.4.0-rc.1 1.4.0 1.4.0.1 1.4.1 1.4.2-beta 1.4.2 1.4.2.1 1.4.2.5
+                    1.4.9 1.5.0-beta 1.5.0 1.9.9 1.9.9-rc.1 2.0.0-0 2.0.0-a 2.0.0-beta.1 2.0.0-pre 2.0.0-rc1 2.0.0 2.0.1 3.0.0
+                    3.0.1 1.4.0.beta 1.4.0.pre.beta 2.0.0.pre 01.4.0]
       mismatches = requirements.product(versions).reject do |requirement, client|
         expected = Gem::Requirement.new(*requirement.split(",").map(&:strip)).satisfied_by?(Gem::Version.new(client))
         range(requirement).satisfied_by?(client) == expected
       end
       expect(mismatches).to be_empty
+    end
+
+    it "leaves prerelease operands to RubyGems, which orders prereleases differently" do
+      [ "~> 1.4.0.beta", "1.4.0.beta.1", ">= 1.4-beta", "~> 1.4.0-beta", ">= 1.4.0-rc.1, < 2" ].each do |legacy|
+        expect([ described_class.translate(legacy), range(legacy).alternatives, range(legacy).to_s ]).to eq([ nil, nil, legacy ])
+      end
+      expect([ range("= 1.4.0.beta").satisfied_by?("1.4.0-beta"), range(">= 1.4.0.beta").satisfied_by?("1.4.0-alpha") ])
+        .to eq([ false, true ])
+    end
+
+    it "reads a string valid in both syntaxes as neutral, so SemVer orders its prerelease operand" do
+      both = range(">= 1.4.0-rc.1")
+      expect([ both.legacy?, both.to_s, both.satisfied_by?("1.4.0-rc.2") ]).to eq([ false, ">=1.4.0-rc.1", true ])
     end
 
     it "keeps requirements the neutral syntax can't hold, evaluated by RubyGems" do

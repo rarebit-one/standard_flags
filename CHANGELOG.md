@@ -53,27 +53,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{"error":{"code":"feature_disabled",...}}` without running the tool.
   `StandardFlags::MCP.visible(tools, actor:, context:, client:)` leaves such
   tools out of `tools/list`, and `StandardFlags::MCP.call(tool, arguments,
-  actor:, context:, client:)` calls with the same evaluation. A
-  `FeatureDisabled` raised inside any tool becomes that error. The gem's own
-  tools are not gated.
+  actor:, context:, client:)` calls with the same evaluation. The gate is
+  evaluated once per call, however deep the subclasses. A `FeatureDisabled`
+  raised inside any tool becomes that error. The gem's own tools are not
+  gated.
 - Conformance: `runtime/client.json` (neutral ranges, prerelease ordering,
   shorthand versions, build ranges, no-platform and unknown-platform
   clients; RubyGems cases marked `"scope": "server"`),
   `versions/version_ranges.json` (versions and builds, for non-Ruby
-  clients) and the server-only `versions/legacy_ranges.json`. Every existing
+  clients; also run through the server's read path, with the five cases
+  where the server's RubyGems fallback differs marked `server_matched`) and
+  the server-only `versions/legacy_ranges.json`. Every existing
   runtime case with a version range also runs with the range in canonical
   neutral form.
 
 ### Changed
 
 - Client conditions in runtime rules compare with `StandardFlags::Version`
-  and `VersionRange`. Ranges stored by 0.2.x in RubyGems syntax evaluate
-  exactly as `Gem::Requirement` did: translated where the neutral syntax can
-  hold them (`~> 1.4` reads as `>=1.4.0 <2.0.0-0`, so `2.0.0-beta.1` still
-  misses it), and evaluated by RubyGems otherwise (`>= 1.4.0.1`). A client
-  version outside SemVer (`1.4.0.1`, `1.4.0.beta`, a `Gem::Version`, a
-  Float) is still read by RubyGems against any range RubyGems can read.
-  Ranges only the neutral syntax can read compare SemVer only.
+  and `VersionRange`. Ranges stored by 0.2.x that only RubyGems can read
+  evaluate exactly as `Gem::Requirement` did: translated where the neutral
+  syntax can hold them (`~> 1.4` reads as `>=1.4.0 <2.0.0-0`, so
+  `2.0.0-beta.1` still misses it), and evaluated by RubyGems otherwise
+  (`>= 1.4.0.1`, and any prerelease operand such as `= 1.4.0.beta`, which
+  RubyGems orders differently). A string valid in both syntaxes
+  (`>= 1.4.0`, `>= 1.0.0-alpha`) is read as neutral, so SemVer client
+  versions compare by SemVer. A client version outside SemVer (`1.4.0.1`,
+  `1.4.0.beta`, a `Gem::Version`, a Float) is still read by RubyGems against
+  any range RubyGems can read. Ranges only the neutral syntax can read
+  compare SemVer only.
+- Deliberate: build metadata in a client version passed in a context's
+  client Hash is ignored, as SemVer says, so `version: "1.4.0+381"` now
+  meets `~> 1.4` and `>= 1.4`; 0.2.2 refused it. The header path accepts it
+  too.
 - `SetConditions` stores version ranges in the neutral syntax where it can:
   a neutral range as given, a RubyGems one translated (`">= 1.4, < 2"` is
   stored as `">=1.4.0 <2.0.0"`), and one the neutral syntax can't hold as

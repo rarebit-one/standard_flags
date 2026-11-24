@@ -54,6 +54,7 @@ RSpec/LeakyLocalVariable:
     - spec/operations_conformance_spec.rb
     - spec/runtime_neutral_ranges_conformance_spec.rb
     - spec/legacy_ranges_conformance_spec.rb
+    - spec/version_ranges_conformance_spec.rb
 
 Style/FrozenStringLiteralComment:
   Enabled: false
