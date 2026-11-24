@@ -36,6 +36,8 @@ module StandardFlags
     /x
     # Longest string `parse` reads, so a header can't make it do much work.
     MAX_LENGTH = 128
+    # ASCII space and tab, the only blanks ignored around a version.
+    BLANKS = [ 32, 9 ].freeze
 
     attr_reader :major, :minor, :patch, :prerelease, :build
 
@@ -61,7 +63,13 @@ module StandardFlags
       bytes = value.to_s.b
       return nil unless bytes.ascii_only?
 
-      bytes.force_encoding(Encoding::UTF_8).sub(/\A[ \t]+/, "").sub(/[ \t]+\z/, "")
+      # A byte scan rather than a regex, so a long run of blanks costs
+      # linear time.
+      first = 0
+      last = bytes.bytesize
+      first += 1 while first < last && BLANKS.include?(bytes.getbyte(first))
+      last -= 1 while last > first && BLANKS.include?(bytes.getbyte(last - 1))
+      bytes.byteslice(first, last - first).force_encoding(Encoding::UTF_8)
     end
 
     def self.parse!(text)

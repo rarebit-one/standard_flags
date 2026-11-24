@@ -27,6 +27,8 @@ RSpec.describe StandardFlags::Version do
       expect(version(text)).to be_nil, "expected #{text.inspect} not to parse"
     end
     expect(version("1.0.0+#{'b' * 122}")).not_to be_nil # 128 characters
+    expect([ described_class.clean(" \t 1.4 \t "), described_class.clean("  "), described_class.clean(nil) ]).to eq([ "1.4", "", nil ])
+    expect(version("#{" \t" * 50_000}x#{" \t" * 50_000}")).to be_nil # linear, not quadratic, in the blanks
   end
 
   it "has no size limit on numbers" do
