@@ -7,6 +7,11 @@ module StandardFlags
   #   StandardFlags::Version.parse("1.4.0-beta.2") < StandardFlags::Version.parse("1.4")  # => true
   #   StandardFlags::Version.parse("v1.4")                                                # => nil
   #
+  # Surrounding ASCII spaces and tabs are ignored; anything else outside the
+  # grammar (other whitespace, non-ASCII bytes, more than 128 characters)
+  # doesn't parse. Values that aren't Strings are read through `to_s`, so a
+  # Gem::Version or a Float (`1.4`) parses too.
+  #
   # Ordering follows SemVer §11: numbers compare by value; a prerelease sorts
   # before its release; prerelease identifiers compare left to right,
   # numeric ones by value and below alphanumeric ones, alphanumeric ones in
@@ -34,17 +39,29 @@ module StandardFlags
 
     attr_reader :major, :minor, :patch, :prerelease, :build
 
-    # The Version for `text` (surrounding whitespace ignored), or nil when it
-    # isn't one. Takes a Version too.
+    # The Version for `text`, or nil when it isn't one. Takes a Version too.
     def self.parse(text)
       return text if text.is_a?(Version)
-      return nil unless text.is_a?(String) || text.is_a?(Symbol) || text.is_a?(Integer)
 
-      text = text.to_s.strip
-      return nil if text.length > MAX_LENGTH
+      text = clean(text)
+      return nil if text.nil? || text.length > MAX_LENGTH
 
       match = PATTERN.match(text)
       match && new(match)
+    end
+
+    # `value.to_s` without surrounding ASCII spaces and tabs, or nil when it
+    # is nil or holds anything but ASCII (invalid UTF-8 included), so
+    # nothing downstream can raise on its encoding.
+    #
+    # @api private
+    def self.clean(value)
+      return nil if value.nil?
+
+      bytes = value.to_s.b
+      return nil unless bytes.ascii_only?
+
+      bytes.force_encoding(Encoding::UTF_8).sub(/\A[ \t]+/, "").sub(/[ \t]+\z/, "")
     end
 
     def self.parse!(text)

@@ -1,5 +1,5 @@
 {
-  "description": "Client conditions in runtime rules: version ranges in the neutral syntax (space-separated comparators, all of which must hold, with || alternatives), SemVer prerelease ordering and shorthand versions, RubyGems ranges stored before the neutral syntax, and build-number ranges. Every rule rolls out to 100% with an off fallthrough, so a met condition reads SPLIT/percentage and an unmet one TARGETING_MATCH/fallthrough. context.client holds the platform, version and build as a client sends them.",
+  "description": "Client conditions in runtime rules: version ranges in the neutral syntax (space-separated comparators, all of which must hold, with || alternatives), SemVer prerelease ordering and shorthand versions, RubyGems ranges stored before the neutral syntax, and build-number ranges. Every rule rolls out to 100% with an off fallthrough, so a met condition reads SPLIT/percentage and an unmet one TARGETING_MATCH/fallthrough. context.client holds the platform, version and build as a client sends them. context.client.platform \"unknown\" means the client sent a platform the app does not recognise: it fails every platform-scoped condition (platform lists, version and build ranges), while a client with no platform fails platform lists but skips per-platform ranges. Cases with \"scope\": \"server\" exercise the RubyGems compatibility the Ruby server keeps for ranges stored by 0.2.x (and client versions passed outside SemVer); they are not part of the portable contract.",
   "registry": {
     "units": [
       "account"
@@ -445,7 +445,7 @@
           "fallthrough_value": "off",
           "conditions": {
             "versions": {
-              "android": ">=1.0.0"
+              "android": ">=1.0.0 <9.0.0"
             }
           }
         }
@@ -459,6 +459,7 @@
       }
     },
     {
+      "scope": "server",
       "name": "a RubyGems pessimistic range still reads",
       "flag": "new_checkout",
       "environment": "production",
@@ -493,6 +494,7 @@
       }
     },
     {
+      "scope": "server",
       "name": "a RubyGems pessimistic range still excludes the next major",
       "flag": "new_checkout",
       "environment": "production",
@@ -527,6 +529,7 @@
       }
     },
     {
+      "scope": "server",
       "name": "a three-part RubyGems pessimistic range bounds the minor",
       "flag": "new_checkout",
       "environment": "production",
@@ -561,6 +564,7 @@
       }
     },
     {
+      "scope": "server",
       "name": "a comma-joined RubyGems range still reads",
       "flag": "new_checkout",
       "environment": "production",
@@ -1010,6 +1014,415 @@
         "reason": "ERROR",
         "rule_id": null,
         "error_code": "PARSE_ERROR"
+      }
+    },
+    {
+      "name": "a client with no platform skips per-platform version ranges",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "version": "1.0.0"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "percentage_bps": 10000,
+          "fallthrough_value": "off",
+          "conditions": {
+            "versions": {
+              "android": ">=9.0.0"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "value": true,
+        "variant": "on",
+        "reason": "SPLIT",
+        "rule_id": "percentage",
+        "error_code": null
+      }
+    },
+    {
+      "name": "a client with no platform skips per-platform build ranges",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {}
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "percentage_bps": 10000,
+          "fallthrough_value": "off",
+          "conditions": {
+            "builds": {
+              "android": ">=120"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "value": true,
+        "variant": "on",
+        "reason": "SPLIT",
+        "rule_id": "percentage",
+        "error_code": null
+      }
+    },
+    {
+      "name": "a client with no platform fails a platform list",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "version": "9.9.9"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "percentage_bps": 10000,
+          "fallthrough_value": "off",
+          "conditions": {
+            "platforms": [
+              "android"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "value": false,
+        "variant": "off",
+        "reason": "TARGETING_MATCH",
+        "rule_id": "fallthrough",
+        "error_code": null
+      }
+    },
+    {
+      "name": "an unknown platform fails a per-platform version range",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "platform": "unknown",
+          "version": "10.0.0"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "percentage_bps": 10000,
+          "fallthrough_value": "off",
+          "conditions": {
+            "versions": {
+              "android": ">=9.0.0"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "value": false,
+        "variant": "off",
+        "reason": "TARGETING_MATCH",
+        "rule_id": "fallthrough",
+        "error_code": null
+      }
+    },
+    {
+      "name": "an unknown platform fails a per-platform build range",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "platform": "unknown",
+          "build": "500"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "percentage_bps": 10000,
+          "fallthrough_value": "off",
+          "conditions": {
+            "builds": {
+              "android": ">=120"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "value": false,
+        "variant": "off",
+        "reason": "TARGETING_MATCH",
+        "rule_id": "fallthrough",
+        "error_code": null
+      }
+    },
+    {
+      "name": "an unknown platform fails a platform list",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "platform": "unknown"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "percentage_bps": 10000,
+          "fallthrough_value": "off",
+          "conditions": {
+            "platforms": [
+              "android",
+              "ios"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "value": false,
+        "variant": "off",
+        "reason": "TARGETING_MATCH",
+        "rule_id": "fallthrough",
+        "error_code": null
+      }
+    },
+    {
+      "scope": "server",
+      "name": "RubyGems ~> excludes a prerelease of its upper bound",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "platform": "android",
+          "version": "2.0.0-beta.1"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "percentage_bps": 10000,
+          "fallthrough_value": "off",
+          "conditions": {
+            "versions": {
+              "android": "~> 1.4"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "value": false,
+        "variant": "off",
+        "reason": "TARGETING_MATCH",
+        "rule_id": "fallthrough",
+        "error_code": null
+      }
+    },
+    {
+      "scope": "server",
+      "name": "RubyGems ~> admits a prerelease below its upper bound",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "platform": "android",
+          "version": "1.9.9-rc.1"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "percentage_bps": 10000,
+          "fallthrough_value": "off",
+          "conditions": {
+            "versions": {
+              "android": "~> 1.4"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "value": true,
+        "variant": "on",
+        "reason": "SPLIT",
+        "rule_id": "percentage",
+        "error_code": null
+      }
+    },
+    {
+      "scope": "server",
+      "name": "a non-SemVer client version is read by RubyGems against a RubyGems-readable range",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "platform": "android",
+          "version": "1.4.0.1"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "percentage_bps": 10000,
+          "fallthrough_value": "off",
+          "conditions": {
+            "versions": {
+              "android": ">= 1.4.0"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "value": true,
+        "variant": "on",
+        "reason": "SPLIT",
+        "rule_id": "percentage",
+        "error_code": null
+      }
+    },
+    {
+      "scope": "server",
+      "name": "a RubyGems-style prerelease client version is read by RubyGems",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "platform": "android",
+          "version": "1.4.0.beta"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "percentage_bps": 10000,
+          "fallthrough_value": "off",
+          "conditions": {
+            "versions": {
+              "android": ">= 1.4.0"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "value": false,
+        "variant": "off",
+        "reason": "TARGETING_MATCH",
+        "rule_id": "fallthrough",
+        "error_code": null
+      }
+    },
+    {
+      "scope": "server",
+      "name": "a RubyGems range the neutral syntax can't hold still evaluates",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "platform": "android",
+          "version": "1.4.0.2"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "percentage_bps": 10000,
+          "fallthrough_value": "off",
+          "conditions": {
+            "versions": {
+              "android": ">= 1.4.0.1"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "value": true,
+        "variant": "on",
+        "reason": "SPLIT",
+        "rule_id": "percentage",
+        "error_code": null
+      }
+    },
+    {
+      "scope": "server",
+      "name": "a RubyGems range the neutral syntax can't hold still excludes",
+      "flag": "new_checkout",
+      "environment": "production",
+      "context": {
+        "units": {
+          "account": "acct_1"
+        },
+        "client": {
+          "platform": "android",
+          "version": "1.4.0"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running",
+          "percentage_bps": 10000,
+          "fallthrough_value": "off",
+          "conditions": {
+            "versions": {
+              "android": ">= 1.4.0.1"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "value": false,
+        "variant": "off",
+        "reason": "TARGETING_MATCH",
+        "rule_id": "fallthrough",
+        "error_code": null
       }
     }
   ]

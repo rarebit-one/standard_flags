@@ -70,7 +70,8 @@ lib/standard_flags/
 lib/tasks/standard_flags.rake
 lib/generators/standard_flags/install/    # install, migrations, admin (controller, routes, Inertia pages)
 spec/fixtures/conformance/          # Shared evaluation fixtures (language-neutral);
-                                    #   versions/version_ranges.json is the client-side range contract
+                                    #   versions/version_ranges.json is the client-side range contract;
+                                    #   versions/legacy_ranges.json and "scope": "server" cases are Ruby-only
 ```
 
 ## Key Rules

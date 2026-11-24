@@ -11,10 +11,26 @@ RSpec.describe StandardFlags::Version do
 
   it "refuses what SemVer refuses" do
     [ "v1.4.0", "1.4.0.1", "01.4.0", "1.04", "1.4-beta", "1.4+381", "1.4.0-", "1.4.0-01", "1.4.0-be_ta", "", " ", nil,
-      1.5, "1" * 200 ].each do |text|
+      "1" * 200, "1.0.0+#{'b' * 123}", true ].each do |text|
       expect(version(text)).to be_nil, "expected #{text.inspect} not to parse"
     end
     expect { described_class.parse!("nope") }.to raise_error(ArgumentError, /"nope" is not a version/)
+  end
+
+  it "reads other values through to_s" do
+    expect([ Gem::Version.new("1.4.0"), 1.5, 2 ].map { |value| version(value).to_s }).to eq(%w[1.4.0 1.5.0 2.0.0])
+  end
+
+  it "ignores only surrounding ASCII spaces and tabs, and never raises on bytes" do
+    expect(version("\t1.4.0 ").to_s).to eq("1.4.0")
+    [ "1.4.0\n", "\u00a01.4.0", "1.4.0\0", "\xFF1.4.0".dup.force_encoding("UTF-8"), "1.4.0\xFF".b ].each do |text|
+      expect(version(text)).to be_nil, "expected #{text.inspect} not to parse"
+    end
+    expect(version("1.0.0+#{'b' * 122}")).not_to be_nil # 128 characters
+  end
+
+  it "has no size limit on numbers" do
+    expect(version("18446744073709551617.0.0") > version("18446744073709551616.9.9")).to be(true)
   end
 
   it "orders by SemVer precedence" do

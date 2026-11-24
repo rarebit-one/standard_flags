@@ -1,5 +1,5 @@
 {
-  "description": "Version ranges as every client and server evaluates them: SemVer 2.0 versions (with the MAJOR.MINOR and MAJOR shorthands, missing parts 0; prerelease and build only on the full form; build metadata ignored) against ranges of space-separated comparators (>=, >, <=, <, =; whitespace after the operator optional), all of which must hold, joined by || alternatives. Ordering is SemVer precedence (\u00a711) and nothing more, so <2.0.0 admits 2.0.0-beta.1. A version that does not parse matches no range. invalid_ranges must be refused (RubyGems requirements are a server-side, read-only compatibility form and are not part of this syntax).",
+  "description": "Version and build ranges as every client and server evaluates them. Versions are SemVer 2.0 with the MAJOR.MINOR and MAJOR shorthands (missing parts 0; prerelease and build only on the full form; build metadata ignored); numbers have no size limit; a version is at most 128 characters after surrounding ASCII spaces and tabs are removed, and contains nothing else outside the grammar. Ranges are comparators (>=, >, <=, <, =) separated by ASCII spaces or tabs, all of which must hold, joined by || alternatives (spaces around || optional; whitespace after an operator optional); a range is at most 1024 characters. Ordering is SemVer precedence (§11) and nothing more, so <2.0.0 admits 2.0.0-beta.1, and a shorthand is an exact version (>1.4 admits 1.4.1, <=1.4 excludes 1.4.5). A version that does not parse matches no range. build_cases use the same comparators over build numbers: 1 to 18 ASCII digits (leading zeros allowed, no sign), so they fit a signed 64-bit integer. invalid_ranges and invalid_build_ranges must be refused. RubyGems requirements are a server-side compatibility form and are not part of this syntax (see legacy_ranges.json).",
   "cases": [
     {
       "range": ">=1.4.0 <2.0.0",
@@ -310,6 +310,86 @@
       "range": ">=0.0.0",
       "version": null,
       "matched": false
+    },
+    {
+      "range": ">1.4",
+      "version": "1.4.1",
+      "matched": true
+    },
+    {
+      "range": ">1.4",
+      "version": "1.4.0",
+      "matched": false
+    },
+    {
+      "range": "<=1.4",
+      "version": "1.4.5",
+      "matched": false
+    },
+    {
+      "range": "<=1.4",
+      "version": "1.4.0",
+      "matched": true
+    },
+    {
+      "range": ">=1||<0.5",
+      "version": "0.4.0",
+      "matched": true
+    },
+    {
+      "range": ">=1||<0.5",
+      "version": "0.7.0",
+      "matched": false
+    },
+    {
+      "range": ">=1\t<2",
+      "version": "1.5.0",
+      "matched": true
+    },
+    {
+      "range": " \t>=1 ",
+      "version": "1.0.0",
+      "matched": true
+    },
+    {
+      "range": ">=18446744073709551616.0.0",
+      "version": "18446744073709551617.0.0",
+      "matched": true
+    },
+    {
+      "range": ">=18446744073709551616.0.0",
+      "version": "18446744073709551615.9.9",
+      "matched": false
+    },
+    {
+      "range": ">=1.0.0",
+      "version": "1.0.0+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "matched": true
+    },
+    {
+      "range": ">=1.0.0",
+      "version": "1.0.0+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "matched": false
+    },
+    {
+      "range": ">=1.0.0",
+      "version": " 1.0.0\t",
+      "matched": true
+    },
+    {
+      "range": ">=0.0.0",
+      "version": "1.0.0\n",
+      "matched": false
+    },
+    {
+      "range": ">=0.0.0",
+      "version": " 1.0.0",
+      "matched": false
+    },
+    {
+      "range": ">=0.0.0",
+      "version": "1.0.0\u0000",
+      "matched": false
     }
   ],
   "invalid_ranges": [
@@ -325,6 +405,92 @@
     "~1.4",
     ">=v1",
     ">=1.2.3.4",
+    "",
+    ">=1.4-beta",
+    ">=1\n<2",
+    ">=1 <2",
+    ">=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0 >=1.0.0"
+  ],
+  "build_cases": [
+    {
+      "range": ">=120 <200",
+      "build": "150",
+      "matched": true
+    },
+    {
+      "range": ">=120 <200",
+      "build": "200",
+      "matched": false
+    },
+    {
+      "range": ">=120 <200",
+      "build": "119",
+      "matched": false
+    },
+    {
+      "range": "=7 || >=12",
+      "build": "7",
+      "matched": true
+    },
+    {
+      "range": "=7 || >=12",
+      "build": "9",
+      "matched": false
+    },
+    {
+      "range": ">=0120",
+      "build": "120",
+      "matched": true
+    },
+    {
+      "range": ">=120",
+      "build": "0381",
+      "matched": true
+    },
+    {
+      "range": ">=1",
+      "build": "999999999999999999",
+      "matched": true
+    },
+    {
+      "range": ">=1",
+      "build": "9999999999999999999",
+      "matched": false
+    },
+    {
+      "range": ">=1",
+      "build": "+5",
+      "matched": false
+    },
+    {
+      "range": ">=1",
+      "build": "-5",
+      "matched": false
+    },
+    {
+      "range": ">=1",
+      "build": "1.2",
+      "matched": false
+    },
+    {
+      "range": ">=1",
+      "build": "",
+      "matched": false
+    },
+    {
+      "range": ">=1",
+      "build": null,
+      "matched": false
+    }
+  ],
+  "invalid_build_ranges": [
+    ">= 1.4.0",
+    ">=-1",
+    ">=+1",
+    "~> 120",
+    ">= 120, < 200",
+    "120",
+    ">=9999999999999999999",
     ""
   ]
 }

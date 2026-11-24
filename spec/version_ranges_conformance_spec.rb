@@ -16,8 +16,22 @@ RSpec.describe "version range conformance fixtures" do
   end
 
   fixture.fetch("invalid_ranges").each do |text|
-    it "refuses #{text.inspect}" do
+    it "refuses #{text.inspect[0, 80]}" do
       expect(StandardFlags::VersionRange.neutral(text)).to be_nil
+    end
+  end
+
+  fixture.fetch("build_cases").each do |example|
+    it "build #{example['build'].inspect} against #{example['range'].inspect} is #{example['matched'] ? 'matched' : 'not matched'}" do
+      range = StandardFlags::BuildRange.parse(example.fetch("range"))
+      expect(range).not_to be_nil
+      expect(range.satisfied_by?(example["build"])).to eq(example.fetch("matched"))
+    end
+  end
+
+  fixture.fetch("invalid_build_ranges").each do |text|
+    it "refuses the build range #{text.inspect}" do
+      expect(StandardFlags::BuildRange.parse(text)).to be_nil
     end
   end
 end

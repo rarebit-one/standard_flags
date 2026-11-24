@@ -853,20 +853,36 @@ end
 
 While a required flag is off, `call` returns
 `{ "error" => { "code" => "feature_disabled", "message" => "threadTools is disabled" } }`
-without running the tool (the message names the wire name, as a controller
-denial does), and `StandardFlags::MCP.visible` leaves the tool out of
-`tools/list`:
+without running the tool, and `StandardFlags::MCP.visible` leaves the tool
+out of `tools/list`. The message names the flag's wire name for the `:mcp`
+audience, else its first wire name, else the key. The gate holds in every
+subclass, including one that defines its own `call`. A
+`StandardFlags::FeatureDisabled` raised inside any tool (gated or not, the
+gem's own included) comes back as the same error, and isn't reported as a
+failure.
+
+List and call through the same two helpers, with the same arguments, and
+they agree by construction: a tool listed for a request is callable by it,
+and one hidden from it is refused.
 
 ```ruby
-server.on_list_tools do |user|
-  StandardFlags::MCP.visible(app_tools + StandardFlags::MCP.tools, actor: user)
+client = StandardFlags::Client.from_headers(request.headers)
+tools = app_tools + StandardFlags::MCP.tools
+
+server.on_list_tools { |user| StandardFlags::MCP.visible(tools, actor: user, client: client) }
+server.on_call_tool do |user, name, arguments|
+  StandardFlags::MCP.call(tools.find { |tool| tool.name == name }, arguments, actor: user, client: client)
 end
 ```
 
-`visible(tools, actor:, context: nil, client: nil)` evaluates each gate as
-its `call` would; `context:` replaces every gate's `for:`, and `client:`
-every gate's `client:`. Ungated tools always appear. The gem's own tools are
-not gated.
+`visible(tools, actor:, context: nil, client: nil)` and
+`call(tool, arguments, actor:, context: nil, client: nil)` evaluate each
+gate for `context:` when given (else the gate's own `for:`, by default the
+actor) and for `client:` when given (else the gate's own `client:`). A nil
+`actor:` resolves through `config.actor_resolver`, as the gem's own tools
+do. Calling `tool.call(arguments, actor:)` directly evaluates as `visible`
+does with no `context:` or `client:`. Ungated tools always appear. The gem's
+own tools are not gated.
 
 ## Admin page
 
@@ -1063,11 +1079,27 @@ StandardFlags.require!(:ai_assistant, for: Current.account)   # raises StandardF
 raise StandardFlags::FeatureDisabled.new(:ai_assistant)         # or raise it yourself
 ```
 
+Inside an action, evaluate for the same context the guards use (this
+request's `standard_flags_context` plus its client):
+
+```ruby
+StandardFlags.require!(:ai_assistant, for: standard_flags_request_context)
+standard_flags_reader.on?(:ai_assistant)
+```
+
 `StandardFlags::FeatureDisabled` (a `StandardFlags::Error`) carries `key`,
 `feature` (the wire name, found as for `meta.feature`) and `status` (403
 unless given). `StandardFlags::Controller` rescues it and renders it exactly
 like a `requires_flag :key` denial: through `config.controller_responder`
-when one is set, else the JSON:API body above.
+when one is set, else the JSON:API body above. One raised with
+`status: 404` answers like `error: :not_found`, with no `meta.feature`.
+
+This holds even when the app declares `rescue_from StandardError` after
+including the module (Rails would otherwise try that handler first, since
+it tries the last declared first). An app takes `FeatureDisabled` over only
+by naming it, `rescue_from StandardFlags::FeatureDisabled, with: ...`;
+`config.controller_responder` is usually the better hook. Nothing is
+rendered for one raised after the action has already rendered.
 
 An app whose API already has its own error envelope renders every denial,
 from guards and from the exception alike, with one responder:
@@ -1161,14 +1193,29 @@ client.build     # => 381
 - **Platform** is downcased and must be one of `config.client_platforms`
   (default `%w[android ios web desktop]`).
 - **Version** must parse as a [version](#versions-and-ranges).
-- **Build** must be a non-negative integer.
+- **Build** must be 1 to 18 ASCII digits.
 
-A value that fails is dropped, as if the header were missing, and emits
+A version or build that fails is dropped, as if the header were missing. A
+platform that fails becomes `"unknown"`. Each emits
 `client_invalid.standard_flags` (with the field and header name, never the
-value). Nothing raises and nothing is reported as an error, because the
-headers come from outside. A request with none of the headers gets an empty
-client, which runtime rules treat as an unknown build: it meets no version
-or build range, so behaviour is exactly as before the headers existed.
+value). Nothing raises, whatever bytes arrive (invalid UTF-8 included), and
+nothing is reported as an error, because the headers come from outside.
+
+Version and build ranges are scoped to a platform, and a rule reads the
+client like this:
+
+| Client | Platform list | That platform's version and build ranges |
+|--------|---------------|------------------------------------------|
+| Recognised platform | must list it | must hold |
+| No platform (no headers, as in 0.2.2) | fails | don't apply |
+| `"unknown"` platform (sent but not recognised) | fails | fail |
+
+So a request with no headers is evaluated exactly as 0.2.2 evaluated an
+empty client: a rule with only `versions: { android: ">=9.0.0" }` still
+reaches it. Add `platforms:` to a rule that must reach only the listed
+platforms. A misspelt platform header (`andriod`) can't step around a
+version floor, because an unknown platform fails every platform-scoped
+condition.
 
 ```ruby
 StandardFlags.configure do |config|
@@ -1187,8 +1234,11 @@ StandardFlags.on?(:new_checkout, for: StandardFlags::Context.new(actors: { accou
 ```
 
 `Context.new(client:)` still takes the Hash form, which keeps its values as
-given (no allowlist): `context.client[:platform]` reads them, and the typed
-readers (`platform`, `version`, `build`) parse them. Jobs and MCP tools take
+given (no allowlist). `context.client` is a `StandardFlags::Client`, a
+frozen Hash subclass, so 0.2.2's reads (`[:platform]`, `fetch`, `dig`,
+`key?`, `each`, `to_h`) work unchanged. The typed readers `platform`,
+`version` and `build` parse the values: a version given as a
+`Gem::Version` or a Float is read through `to_s`. Jobs and MCP tools take
 `client:` too (see [Controller and job guards](#controller-and-job-guards)
 and [Operator tools](#operator-tools-mcp)).
 
@@ -1201,10 +1251,12 @@ suffix. Ordering is SemVer precedence: a prerelease sorts before its release
 (`1.4.0-rc.1 < 1.4.0`), numeric prerelease identifiers compare by value and
 below alphanumeric ones, and build metadata never counts
 (`1.4.0+381 == 1.4.0`). `v1.4`, `1.4.0.1` and leading zeros don't parse.
+Numbers have no size limit; a version is at most 128 characters.
 
 Version ranges are comparators (`>=`, `>`, `<=`, `<`, `=`) separated by
 spaces, all of which must hold, with optional `||` alternatives.
-Whitespace after an operator is optional:
+Whitespace after an operator is optional, and means ASCII spaces and tabs
+only. A range is at most 1024 characters:
 
 ```
 >=1.4.0 <2.0.0
@@ -1215,10 +1267,13 @@ Whitespace after an operator is optional:
 The syntax is deliberately small so the Kotlin and TypeScript clients can
 implement it; `version_ranges.json` in the [conformance suite](#conformance-suite)
 pins its meaning. Comparison is plain ordering, so `<2.0.0` admits
-`2.0.0-beta.1`. A client version that doesn't parse meets no range.
+`2.0.0-beta.1`, and a shorthand is an exact version rather than a wildcard:
+`>1.4` admits `1.4.1`, and `<=1.4` excludes `1.4.5`. A client version that
+doesn't parse meets no neutral range.
 
-Build ranges use the same comparators over integers: `>=120 <200`. A rule's
-`builds` sit beside its `versions`, per platform, and both must hold:
+Build ranges use the same comparators over build numbers (1 to 18 digits,
+leading zeros allowed, no sign): `>=120 <200`. A rule's `builds` sit beside
+its `versions`, per platform, and both must hold:
 
 ```ruby
 StandardFlags::Operations::SetConditions.call(:new_checkout, actor: admin, reason: "needs the new SDK",
@@ -1226,12 +1281,26 @@ StandardFlags::Operations::SetConditions.call(:new_checkout, actor: admin, reaso
 ```
 
 Ranges written with 0.2.x used RubyGems syntax (`">= 1.4.0"`, `"~> 1.4"`,
-`">= 1.4, < 2"`). Stored ones keep evaluating as before: they are
-translated when read (`~> 1.4` → `>=1.4.0 <2.0.0`, `~> 1.4.2` →
-`>=1.4.2 <1.5.0`, `!= 1.5` → `<1.5.0 || >1.5.0`). `SetConditions` accepts
-either syntax and stores the neutral one (a range already in the neutral
-syntax is stored as given). `StandardFlags::VersionRange.translate` converts
-one by hand.
+`">= 1.4, < 2"`). Stored ones keep evaluating exactly as `Gem::Requirement`
+evaluates them, prerelease client versions included:
+
+- One with a neutral equivalent is translated: `~> 1.4` reads as
+  `>=1.4.0 <2.0.0-0`, `~> 1.4.2` as `>=1.4.2 <1.5.0-0`, and `!= 1.5` as
+  `<1.5.0 || >1.5.0`. The `-0` is SemVer's lowest prerelease, so
+  `<2.0.0-0` excludes `2.0.0-beta.1` as well as `2.0.0`, matching RubyGems,
+  whose `~>` compares only the release part.
+- One the neutral syntax can't hold (`>= 1.4.0.1`, or more than 64
+  alternatives' worth of `!=`) is evaluated with `Gem::Requirement` and
+  doesn't block operations on the rule.
+- A client version outside SemVer (`1.4.0.1`, `1.4.0.beta`, passed in the
+  Hash form; headers require SemVer) is read by RubyGems against any range
+  RubyGems can read, `">= 1.4.0"` included, as 0.2.2 did. Ranges only the
+  neutral syntax can read compare SemVer only.
+
+`SetConditions` accepts either syntax and stores the neutral form: a
+neutral range as given, a RubyGems one translated, and one the neutral
+syntax can't hold as given. `StandardFlags::VersionRange.translate`
+converts one by hand.
 
 ## Client payload
 
@@ -1526,12 +1595,17 @@ from the server on what a flag evaluates to. `runtime/*.json` adds runtime
 rules: each case's rule, cohorts and memberships plus a context (unit keys,
 client, segments) in; value, variant, reason, error code and `rule_id` out,
 including the v1 and v2 bucket boundaries. `runtime/client.json` covers
-client conditions: neutral and RubyGems version ranges, prerelease ordering,
-shorthand versions and build ranges.
+client conditions: neutral version ranges, prerelease ordering, shorthand
+versions, build ranges, and clients with no platform or an unknown one.
+Cases marked `"scope": "server"` exercise the RubyGems compatibility only
+the Ruby server keeps; other evaluators skip them.
 
 `versions/version_ranges.json` is for clients: a version and a range in,
-`matched` true or false out, plus ranges every implementation must refuse.
-It uses only the neutral syntax.
+`matched` true or false out, the same for build numbers, plus ranges every
+implementation must refuse, with the length and whitespace limits in its
+description. It uses only the neutral syntax.
+`versions/legacy_ranges.json` (`"scope": "server"`) pins how RubyGems
+ranges stored by 0.2.x translate and evaluate, against `Gem::Requirement`.
 
 ## Bucketing
 

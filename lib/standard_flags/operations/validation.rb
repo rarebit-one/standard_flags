@@ -56,11 +56,23 @@ module StandardFlags
 
       # The stored form of a version range: as given when it is already in
       # the neutral syntax, else the neutral translation of a RubyGems
-      # requirement (`"~> 1.4"` → `">=1.4.0 <2.0.0"`).
+      # requirement (`"~> 1.4"` → `">=1.4.0 <2.0.0-0"`), else (a RubyGems
+      # requirement the neutral syntax can't express, such as
+      # `">= 1.4.0.1"`) as given, which evaluates through Gem::Requirement.
       def version_range!(range)
-        return range.to_s if VersionRange.neutral(range.to_s)
+        text = range.to_s
+        return text if VersionRange.neutral(text)
 
-        VersionRange.translate(range.to_s) || invalid!("version range #{range.inspect} does not parse")
+        translated = VersionRange.translate(text)
+        return translated if translated
+        return text if VersionRange.parse(text)
+
+        invalid!("version range #{range.inspect} does not parse")
+      end
+
+      # A stored version range the read path can evaluate, in either syntax.
+      def stored_version_range!(range)
+        VersionRange.parse(range.to_s) || invalid!("version range #{range.inspect} does not parse")
       end
 
       def build_range!(range)
@@ -116,7 +128,7 @@ module StandardFlags
             invalid!(":#{definition.key} has a percentage but no rollout value or variant weights to serve")
           end
           rule.platforms
-          rule.versions.each_value { |range| version_range!(range) }
+          rule.versions.each_value { |range| stored_version_range!(range) }
           rule.builds.each_value { |range| build_range!(range) }
           rule.segments.each { |segment| value!(definition, segment["value"], "segment #{segment['name']}'s value") }
           rule.cohort_attachments.each do |key, value|

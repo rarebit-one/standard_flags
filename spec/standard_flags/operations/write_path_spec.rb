@@ -408,10 +408,19 @@ RSpec.describe StandardFlags::Operations, registry: OperationHelpers::REGISTRY d
       end
     end
 
-    it "stores a neutral version range as given and a RubyGems one translated" do
-      op!(ops::SetConditions, :new_checkout, versions: { ios: ">= 2.0", android: "~> 1.4.2", web: ">=1.0.0 <2.0.0 || =0.9.5-beta.1" })
+    it "stores a neutral version range as given, a RubyGems one translated, and one the neutral syntax can't hold as given" do
+      op!(ops::SetConditions, :new_checkout, versions: { ios: ">= 2.0", android: "~> 1.4.2", web: ">=1.0.0 <2.0.0 || =0.9.5-beta.1",
+                                                         desktop: ">= 1.4.0.1" })
       expect(store.rule(:new_checkout).versions)
-        .to eq("ios" => ">= 2.0", "android" => ">=1.4.2 <1.5.0", "web" => ">=1.0.0 <2.0.0 || =0.9.5-beta.1")
+        .to eq("ios" => ">= 2.0", "android" => ">=1.4.2 <1.5.0-0", "web" => ">=1.0.0 <2.0.0 || =0.9.5-beta.1", "desktop" => ">= 1.4.0.1")
+    end
+
+    it "lets operations run on a rule whose stored RubyGems range the neutral syntax can't hold" do
+      store.put_rule(:new_checkout, status: :running, fallthrough_value: false, conditions: { "versions" => { "ios" => ">= 1.4.0.1" } })
+      expect(op(ops::Ramp, :new_checkout, bps: 500)).to be_success
+      expect(StandardFlags.evaluate(:new_checkout, for: for_account(account_id("new_checkout", 500, inside: true),
+                                                                   client: { platform: "ios", version: "1.4.0.2" })).rule_id)
+        .to eq("percentage")
     end
 
     it "stores build ranges per platform alongside version ranges" do

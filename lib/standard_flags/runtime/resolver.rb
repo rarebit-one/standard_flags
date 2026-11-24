@@ -158,6 +158,8 @@ module StandardFlags
           nil
         end
 
+        # A client with no platform skips per-platform ranges (as 0.2.2 did);
+        # one whose platform is unknown meets no platform-scoped condition.
         def client_conditions_met?
           platforms = rule.platforms
           versions = rule.versions
@@ -165,11 +167,13 @@ module StandardFlags
           return true if platforms.empty? && versions.empty? && builds.empty?
 
           client = context.client
+          return false if client.unknown_platform?
+
           platform = client.platform
           return false if platforms.any? && !platforms.include?(platform)
           return true if platform.nil?
 
-          in_range?(VersionRange, versions[platform], client.version) && in_range?(BuildRange, builds[platform], client.build)
+          in_range?(VersionRange, versions[platform], client[:version]) && in_range?(BuildRange, builds[platform], client[:build])
         end
 
         # A missing range is met; a client value that's missing (or didn't
@@ -181,7 +185,7 @@ module StandardFlags
           range = kind.parse(stored.to_s)
           raise Invalid, "has an invalid #{kind == BuildRange ? 'build' : 'version'} range #{stored.inspect}" unless range
 
-          !value.nil? && range.satisfied_by?(value)
+          range.satisfied_by?(value)
         end
 
         def split(key)

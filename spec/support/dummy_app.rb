@@ -32,6 +32,11 @@ Dummy::Application.routes.draw do
   get "/client/checkout" => "client_features#checkout"
   get "/client/raise" => "client_features#raise_disabled"
   get "/client/pinned" => "pinned_client#index"
+  get "/client/reader" => "client_features#reader"
+  get "/client/late" => "client_features#late"
+  get "/rescuing/disabled" => "rescuing#disabled"
+  get "/rescuing/boom" => "rescuing#boom"
+  get "/targeted/disabled" => "targeted#disabled"
 end
 
 require_relative "dummy_controllers"

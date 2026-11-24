@@ -1,5 +1,7 @@
 module StandardFlags
-  # The calling client: platform, version and build. Immutable.
+  # The calling client: platform, version and build. A frozen Hash of the
+  # attributes as given (so `fetch`, `dig`, `key?`, `each` and `to_h` work as
+  # they did on 0.2.2's client Hash), plus typed readers:
   #
   #   client = StandardFlags::Client.from_headers(request.headers)
   #   client.platform  # => "android"
@@ -10,28 +12,39 @@ module StandardFlags
   # `from_headers` reads `X-Client-Platform`, `X-Client-Version` and
   # `X-Client-Build` (the names are `config.client_headers`). The platform is
   # downcased and must be one of `config.client_platforms`; the version must
-  # parse as a StandardFlags::Version; the build must be a non-negative
-  # integer. A value that fails is dropped, as if the header were missing,
-  # and emits `client_invalid.standard_flags`; nothing raises, and nothing is
-  # reported as an error. A request with none of the headers gives an empty
-  # client, which rules treat as an unknown build.
+  # parse as a StandardFlags::Version; the build must be 1 to 18 digits. A
+  # version or build that fails is dropped, as if the header were missing; a
+  # platform that fails becomes "unknown" (below). Either way it emits
+  # `client_invalid.standard_flags`; nothing raises, whatever bytes arrive,
+  # and nothing is reported as an error. A request with none of the headers
+  # gives an empty client.
+  #
+  # Runtime rules scope version and build ranges to a platform. An empty
+  # client (no platform) fails a rule's platform list but skips its
+  # per-platform ranges, as in 0.2.2. A client whose platform is "unknown"
+  # (sent but not recognised) fails every platform-scoped condition: the
+  # platform list and every version or build range. So a misspelt platform
+  # header can't step around a version floor.
   #
   # `Client.new(platform: "ios", version: "2.1.0")` (or a Context's
-  # `client:` Hash) keeps whatever it is given, the way 0.2.2 did: `[]`,
-  # `to_h` and the memo key see the given values, and the typed readers
-  # parse them (platform downcased, version as a Version or nil, build as an
-  # Integer or nil) with no allowlist and no notification. Other keys are
-  # kept too.
-  class Client
+  # `client:` Hash) keeps whatever it is given, the way 0.2.2 did, other keys
+  # included. The typed readers parse it with no allowlist and no
+  # notification: platform stripped and downcased, version as a Version (via
+  # `to_s`) or nil, build as an Integer or nil.
+  class Client < Hash
     FIELDS = %i[platform version build].freeze
+    # The platform of a client that sent one this app doesn't recognise.
+    UNKNOWN_PLATFORM = "unknown".freeze
     # Longest header value read.
     MAX_LENGTH = 128
-
-    attr_reader :platform, :version, :build
 
     class << self
       def empty
         @empty ||= new
+      end
+
+      def [](*arguments)
+        new(Hash[*arguments])
       end
 
       # A Client from a Client, a Hash of attributes, or nil (empty).
@@ -39,7 +52,7 @@ module StandardFlags
         case value
         when Client then value
         when nil then empty
-        when Hash then value.empty? ? empty : new(**value.transform_keys(&:to_sym))
+        when Hash then value.empty? ? empty : new(value)
         else raise ArgumentError, "client: must be a StandardFlags::Client or a Hash, not a #{value.class}"
         end
       end
@@ -49,20 +62,21 @@ module StandardFlags
       # as HTTP_X_CLIENT_PLATFORM and so on) or a plain Hash.
       def from_headers(headers)
         config = StandardFlags.config
-        names = config.client_headers
         attributes = FIELDS.each_with_object({}) do |field, found|
-          name = names[field]
-          raw = name && header(headers, name.to_s)
-          next if raw.nil? || raw.to_s.strip.empty?
+          name = config.client_headers[field]&.to_s
+          raw = name && header(headers, name)
+          next if raw.nil?
 
-          value = normalize(field, raw.to_s.strip, config)
-          if value.nil?
-            Reporting.instrument(:client_invalid, field: field, header: name.to_s)
-          else
-            found[field] = value
-          end
+          text = Version.clean(raw)
+          next if text&.empty?
+
+          value = text && normalize(field, text, config)
+          next found[field] = value unless value.nil?
+
+          Reporting.instrument(:client_invalid, field: field, header: name)
+          found[field] = UNKNOWN_PLATFORM if field == :platform
         end
-        attributes.empty? ? empty : new(**attributes)
+        attributes.empty? ? empty : new(attributes)
       end
 
       private
@@ -83,61 +97,38 @@ module StandardFlags
         case field
         when :platform
           platform = value.downcase
-          platform if config.client_platforms.map { |name| name.to_s.downcase }.include?(platform)
+          allowed = config.client_platforms.map { |name| name.to_s.downcase } - [ UNKNOWN_PLATFORM ]
+          platform if allowed.include?(platform)
         when :version then value if Version.parse(value)
         when :build then value if BuildRange.number(value)
         end
       end
     end
 
-    def initialize(**attributes)
-      @attributes = attributes.transform_keys(&:to_sym).freeze
-      @platform = present(@attributes[:platform])&.downcase&.freeze
-      @version = Version.parse(@attributes[:version])
-      @build = BuildRange.number(@attributes[:build])
+    def initialize(attributes = nil, **keywords)
+      super()
+      (attributes || {}).to_h.merge(keywords).each { |key, value| store(key.to_sym, value) }
       freeze
     end
 
-    # The value as given, by field name.
-    def [](field)
-      @attributes[field.to_sym]
+    # The platform, stripped and downcased, or nil when there is none or it
+    # is "unknown".
+    def platform
+      text = Version.clean(self[:platform])&.downcase
+      text unless text.nil? || text.empty? || text == UNKNOWN_PLATFORM
     end
 
-    def to_h
-      @attributes
+    # Whether the client sent a platform that isn't recognised.
+    def unknown_platform?
+      Version.clean(self[:platform])&.downcase == UNKNOWN_PLATFORM
     end
 
-    def empty?
-      @attributes.empty?
+    def version
+      Version.parse(self[:version])
     end
 
-    # Equal to another Client with the same attributes, or to the Hash of
-    # them (so `context.client == { platform: "ios" }` still reads true).
-    def ==(other)
-      case other
-      when Client then to_h == other.to_h
-      when Hash then to_h == other.transform_keys(&:to_sym)
-      else false
-      end
-    end
-
-    def eql?(other)
-      other.is_a?(Client) && to_h.eql?(other.to_h)
-    end
-
-    def hash
-      [ self.class, @attributes ].hash
-    end
-
-    def inspect
-      "#<StandardFlags::Client #{@attributes.map { |k, v| "#{k}=#{v.inspect}" }.join(' ')}>"
-    end
-
-    private
-
-    def present(value)
-      text = value.to_s.strip unless value.nil?
-      text unless text.nil? || text.empty?
+    def build
+      BuildRange.number(self[:build])
     end
   end
 end

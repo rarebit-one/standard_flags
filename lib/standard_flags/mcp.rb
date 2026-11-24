@@ -67,15 +67,28 @@ module StandardFlags
     # The tools to list for `actor`: every tool, less the gated ones
     # (StandardFlags::MCP::Gated) with a required flag off. `context:`
     # evaluates every gate for that context instead of each one's `for:`;
-    # `client:` overrides each gate's client.
+    # `client:` overrides each gate's client. A nil `actor:` resolves
+    # through `config.actor_resolver`.
     #
-    #   StandardFlags::MCP.visible(app_tools + StandardFlags::MCP.tools, actor: current_user,
-    #                              client: StandardFlags::Client.from_headers(request.headers))
+    #   client = StandardFlags::Client.from_headers(request.headers)
+    #   StandardFlags::MCP.visible(tools, actor: current_user, client: client)            # tools/list
+    #   StandardFlags::MCP.call(tool, arguments, actor: current_user, client: client)     # tools/call
     def visible(tools, actor: nil, context: nil, client: nil)
       tools.reject do |tool|
         tool.respond_to?(:standard_flags_disabled) &&
           tool.standard_flags_disabled(actor: actor, context: context, client: client)
       end
+    end
+
+    # Calls `tool` as `tool.call(arguments, actor:)`, with its gates
+    # evaluated for exactly what `visible` evaluates them for given the same
+    # `actor:`, `context:` and `client:`. A StandardFlags::FeatureDisabled
+    # raised by any tool, gated or not, comes back as the `feature_disabled`
+    # tool error.
+    def call(tool, arguments, actor: nil, context: nil, client: nil)
+      Gated.within(context: context, client: client) { tool.call(arguments, actor: actor) }
+    rescue FeatureDisabled => e
+      feature_disabled(e)
     end
 
     # The tool error for a StandardFlags::FeatureDisabled.
@@ -167,6 +180,8 @@ module StandardFlags
         MCP.json(Runtime.tracker.untracked { perform(args) })
       rescue ToolError => e
         error(e.code, e.message)
+      rescue FeatureDisabled => e
+        MCP.feature_disabled(e)
       rescue StandardError => e
         Reporting.report(Error.new("#{name} failed: #{e.class}"), tool: name)
         error(:error, "#{name} failed: #{e.class}")

@@ -32,13 +32,19 @@ module StandardFlags
   #
   # A StandardFlags::FeatureDisabled raised in an action (or by
   # `StandardFlags.require!`) is answered the same way, through
-  # `config.controller_responder` or the default response.
+  # `config.controller_responder` or the default response, even when the
+  # app declares `rescue_from StandardError` after including this module.
+  # Only an app's own `rescue_from StandardFlags::FeatureDisabled` (or a
+  # subclass) takes it over. One raised with `status: 404` answers like
+  # `error: :not_found`, with no meta.
   #
   # Flags are evaluated for `standard_flags_context` plus the calling client,
   # read once per request from the X-Client-Platform, X-Client-Version and
   # X-Client-Build headers (`standard_flags_client`). A context that already
   # carries a client keeps it. `config.read_client_headers = false` turns
-  # the headers off.
+  # the headers off. Inside an action, `standard_flags_reader` (or
+  # `StandardFlags.require!(key, for: standard_flags_request_context)`)
+  # evaluates for the same context the guards use.
   module Controller
     extend ActiveSupport::Concern
 
@@ -54,7 +60,9 @@ module StandardFlags
     end
 
     included do
-      helper_method :standard_flags_payload, :standard_flags_client if respond_to?(:helper_method)
+      if respond_to?(:helper_method)
+        helper_method :standard_flags_payload, :standard_flags_client, :standard_flags_request_context, :standard_flags_reader
+      end
       rescue_from FeatureDisabled, with: :standard_flags_feature_disabled if respond_to?(:rescue_from)
     end
 
@@ -89,10 +97,11 @@ module StandardFlags
     end
 
     # The calling client, from this request's headers (memoised). Empty
-    # when `config.read_client_headers` is false or no header is sent.
+    # when `config.read_client_headers` is false, no header is sent, or the
+    # controller has no request (a console or a spec).
     def standard_flags_client
       @standard_flags_client ||=
-        if StandardFlags.config.read_client_headers
+        if StandardFlags.config.read_client_headers && request
           Client.from_headers(request.headers)
         else
           Client.empty
@@ -100,10 +109,42 @@ module StandardFlags
     end
 
     # `standard_flags_context`, with the request's client unless it already
-    # names one.
+    # names one: what guards and the payload evaluate for.
     def standard_flags_request_context
       context = Context.wrap(standard_flags_context)
       context.client.empty? ? context.with_client(standard_flags_client) : context
+    end
+
+    # A reader for this request's context, for reads inside an action:
+    # `standard_flags_reader.on?(:new_checkout)`.
+    def standard_flags_reader
+      StandardFlags.reader(for: standard_flags_request_context)
+    end
+
+    # FeatureDisabled is answered here even when an app `rescue_from`
+    # (StandardError, say) declared after the include would otherwise win,
+    # since Rails tries handlers last-declared first.
+    def rescue_with_handler(exception)
+      handler = standard_flags_handler(exception)
+      return super unless handler
+
+      handler.call(exception)
+      exception
+    end
+
+    def handler_for_rescue(exception)
+      standard_flags_handler(exception) || super
+    end
+    public :rescue_with_handler, :handler_for_rescue
+
+    def standard_flags_handler(exception)
+      return unless exception.is_a?(FeatureDisabled)
+
+      targeted = self.class.rescue_handlers.any? do |name, handler|
+        klass = name.safe_constantize if handler != :standard_flags_feature_disabled
+        klass.is_a?(Class) && klass <= FeatureDisabled
+      end
+      method(:standard_flags_feature_disabled) unless targeted
     end
 
     def standard_flags_require!(key, error:, status:, responder: nil)
@@ -113,9 +154,13 @@ module StandardFlags
                           responder)
     end
 
+    # A 404 answers like `error: :not_found`, revealing no feature name.
+    # Nothing is rendered when the action already has.
     def standard_flags_feature_disabled(exception)
-      standard_flags_deny(Denial.new(key: exception.key, error: :feature_disabled, status: exception.status,
-                                     feature: exception.feature), nil)
+      return if performed?
+
+      error = exception.status == ERRORS[:not_found] ? :not_found : :feature_disabled
+      standard_flags_deny(Denial.new(key: exception.key, error: error, status: exception.status, feature: exception.feature), nil)
     end
 
     def standard_flags_deny(denial, responder)

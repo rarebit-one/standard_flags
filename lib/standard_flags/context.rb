@@ -23,7 +23,7 @@ module StandardFlags
 
     # A Context from a Context, a Hash of actors, a single target or nil.
     # `client:` (a Client or a Hash) replaces the context's client when
-    # given.
+    # given and not empty; nil and `{}` both leave it as it is.
     def self.wrap(value, client: nil)
       context =
         case value
@@ -32,7 +32,7 @@ module StandardFlags
         when Hash then new(actors: value)
         else new(target: value)
         end
-      client.nil? ? context : context.with_client(client)
+      client.nil? || (client.respond_to?(:empty?) && client.empty?) ? context : context.with_client(client)
     end
 
     def self.empty
