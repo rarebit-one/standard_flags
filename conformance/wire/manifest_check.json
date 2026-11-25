@@ -4659,6 +4659,687 @@
       }
     },
     {
+      "name": "a manifest holding only a version is invalid, not empty",
+      "committed": {
+        "version": 2
+      },
+      "current": {
+        "version": 2,
+        "audiences": {
+          "mobile": {
+            "public": false
+          },
+          "web": {
+            "public": false
+          }
+        },
+        "flags": [
+          {
+            "key": "ai_assistant",
+            "kind": "kill_switch",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": true,
+            "audiences": {
+              "mobile": [
+                "chat",
+                "chatEnabled"
+              ],
+              "web": [
+                "assistant"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "home_hero",
+            "kind": "experiment",
+            "type": "string",
+            "values": [
+              "control",
+              "savings"
+            ],
+            "default": "control",
+            "audiences": {
+              "mobile": [
+                "homeHero"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "new_checkout",
+            "kind": "flag",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": false,
+            "audiences": {
+              "web": [
+                "newCheckout"
+              ]
+            },
+            "min_client": {},
+            "permanent": false,
+            "remove_by": "2027-06-01",
+            "final": true
+          }
+        ],
+        "tombstones": [
+          {
+            "key": "banner_v1",
+            "removed": "2026-06-01",
+            "serve": {
+              "web": {
+                "banner": true
+              }
+            },
+            "until": "2026-12-31",
+            "until_clients": {}
+          },
+          {
+            "key": "chat_v1",
+            "removed": "2026-12-01",
+            "serve": {
+              "mobile": {
+                "chat_v1": false
+              }
+            },
+            "until": "2027-03-01",
+            "until_clients": {}
+          }
+        ],
+        "clients": {}
+      },
+      "expected": {
+        "status": "invalid",
+        "invalid": "committed"
+      }
+    },
+    {
+      "name": "an audience whose public isn't true or false makes the manifest invalid",
+      "committed": {
+        "version": 2,
+        "audiences": {
+          "mobile": {
+            "public": "yes"
+          },
+          "web": {
+            "public": false
+          }
+        },
+        "flags": [
+          {
+            "key": "ai_assistant",
+            "kind": "kill_switch",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": true,
+            "audiences": {
+              "mobile": [
+                "chat",
+                "chatEnabled"
+              ],
+              "web": [
+                "assistant"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "home_hero",
+            "kind": "experiment",
+            "type": "string",
+            "values": [
+              "control",
+              "savings"
+            ],
+            "default": "control",
+            "audiences": {
+              "mobile": [
+                "homeHero"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "new_checkout",
+            "kind": "flag",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": false,
+            "audiences": {
+              "web": [
+                "newCheckout"
+              ]
+            },
+            "min_client": {},
+            "permanent": false,
+            "remove_by": "2027-06-01",
+            "final": true
+          }
+        ],
+        "tombstones": [
+          {
+            "key": "banner_v1",
+            "removed": "2026-06-01",
+            "serve": {
+              "web": {
+                "banner": true
+              }
+            },
+            "until": "2026-12-31",
+            "until_clients": {}
+          },
+          {
+            "key": "chat_v1",
+            "removed": "2026-12-01",
+            "serve": {
+              "mobile": {
+                "chat_v1": false
+              }
+            },
+            "until": "2027-03-01",
+            "until_clients": {}
+          }
+        ],
+        "clients": {}
+      },
+      "current": {
+        "version": 2,
+        "audiences": {
+          "mobile": {
+            "public": false
+          },
+          "web": {
+            "public": false
+          }
+        },
+        "flags": [
+          {
+            "key": "ai_assistant",
+            "kind": "kill_switch",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": true,
+            "audiences": {
+              "mobile": [
+                "chat",
+                "chatEnabled"
+              ],
+              "web": [
+                "assistant"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "home_hero",
+            "kind": "experiment",
+            "type": "string",
+            "values": [
+              "control",
+              "savings"
+            ],
+            "default": "control",
+            "audiences": {
+              "mobile": [
+                "homeHero"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "new_checkout",
+            "kind": "flag",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": false,
+            "audiences": {
+              "web": [
+                "newCheckout"
+              ]
+            },
+            "min_client": {},
+            "permanent": false,
+            "remove_by": "2027-06-01",
+            "final": true
+          }
+        ],
+        "tombstones": [
+          {
+            "key": "banner_v1",
+            "removed": "2026-06-01",
+            "serve": {
+              "web": {
+                "banner": true
+              }
+            },
+            "until": "2026-12-31",
+            "until_clients": {}
+          },
+          {
+            "key": "chat_v1",
+            "removed": "2026-12-01",
+            "serve": {
+              "mobile": {
+                "chat_v1": false
+              }
+            },
+            "until": "2027-03-01",
+            "until_clients": {}
+          }
+        ],
+        "clients": {}
+      },
+      "expected": {
+        "status": "invalid",
+        "invalid": "committed"
+      }
+    },
+    {
+      "name": "a remove_by that isn't a calendar date makes the manifest invalid",
+      "committed": {
+        "version": 2,
+        "audiences": {
+          "mobile": {
+            "public": false
+          },
+          "web": {
+            "public": false
+          }
+        },
+        "flags": [
+          {
+            "key": "ai_assistant",
+            "kind": "kill_switch",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": true,
+            "audiences": {
+              "mobile": [
+                "chat",
+                "chatEnabled"
+              ],
+              "web": [
+                "assistant"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "home_hero",
+            "kind": "experiment",
+            "type": "string",
+            "values": [
+              "control",
+              "savings"
+            ],
+            "default": "control",
+            "audiences": {
+              "mobile": [
+                "homeHero"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "new_checkout",
+            "kind": "flag",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": false,
+            "audiences": {
+              "web": [
+                "newCheckout"
+              ]
+            },
+            "min_client": {},
+            "permanent": false,
+            "remove_by": "2027-06-01",
+            "final": true
+          }
+        ],
+        "tombstones": [
+          {
+            "key": "banner_v1",
+            "removed": "2026-06-01",
+            "serve": {
+              "web": {
+                "banner": true
+              }
+            },
+            "until": "2026-12-31",
+            "until_clients": {}
+          },
+          {
+            "key": "chat_v1",
+            "removed": "2026-12-01",
+            "serve": {
+              "mobile": {
+                "chat_v1": false
+              }
+            },
+            "until": "2027-03-01",
+            "until_clients": {}
+          }
+        ],
+        "clients": {}
+      },
+      "current": {
+        "version": 2,
+        "audiences": {
+          "mobile": {
+            "public": false
+          },
+          "web": {
+            "public": false
+          }
+        },
+        "flags": [
+          {
+            "key": "ai_assistant",
+            "kind": "kill_switch",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": true,
+            "audiences": {
+              "mobile": [
+                "chat",
+                "chatEnabled"
+              ],
+              "web": [
+                "assistant"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "home_hero",
+            "kind": "experiment",
+            "type": "string",
+            "values": [
+              "control",
+              "savings"
+            ],
+            "default": "control",
+            "audiences": {
+              "mobile": [
+                "homeHero"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "new_checkout",
+            "kind": "flag",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": false,
+            "audiences": {
+              "web": [
+                "newCheckout"
+              ]
+            },
+            "min_client": {},
+            "permanent": false,
+            "remove_by": "2027-02-30",
+            "final": true
+          }
+        ],
+        "tombstones": [
+          {
+            "key": "banner_v1",
+            "removed": "2026-06-01",
+            "serve": {
+              "web": {
+                "banner": true
+              }
+            },
+            "until": "2026-12-31",
+            "until_clients": {}
+          },
+          {
+            "key": "chat_v1",
+            "removed": "2026-12-01",
+            "serve": {
+              "mobile": {
+                "chat_v1": false
+              }
+            },
+            "until": "2027-03-01",
+            "until_clients": {}
+          }
+        ],
+        "clients": {}
+      },
+      "expected": {
+        "status": "invalid",
+        "invalid": "current"
+      }
+    },
+    {
+      "name": "a serve block without until_clients makes the manifest invalid",
+      "committed": {
+        "version": 2,
+        "audiences": {
+          "mobile": {
+            "public": false
+          },
+          "web": {
+            "public": false
+          }
+        },
+        "flags": [
+          {
+            "key": "ai_assistant",
+            "kind": "kill_switch",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": true,
+            "audiences": {
+              "mobile": [
+                "chat",
+                "chatEnabled"
+              ],
+              "web": [
+                "assistant"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "home_hero",
+            "kind": "experiment",
+            "type": "string",
+            "values": [
+              "control",
+              "savings"
+            ],
+            "default": "control",
+            "audiences": {
+              "mobile": [
+                "homeHero"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "new_checkout",
+            "kind": "flag",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": false,
+            "audiences": {
+              "web": [
+                "newCheckout"
+              ]
+            },
+            "min_client": {},
+            "permanent": false,
+            "remove_by": "2027-06-01",
+            "final": true
+          }
+        ],
+        "tombstones": [
+          {
+            "key": "banner_v1",
+            "removed": "2026-06-01",
+            "serve": {
+              "web": {
+                "banner": true
+              }
+            },
+            "until": "2026-12-31",
+            "until_clients": {}
+          },
+          {
+            "key": "chat_v1",
+            "removed": "2026-12-01",
+            "serve": {
+              "mobile": {
+                "chat_v1": false
+              }
+            },
+            "until": "2027-03-01"
+          }
+        ],
+        "clients": {}
+      },
+      "current": {
+        "version": 2,
+        "audiences": {
+          "mobile": {
+            "public": false
+          },
+          "web": {
+            "public": false
+          }
+        },
+        "flags": [
+          {
+            "key": "ai_assistant",
+            "kind": "kill_switch",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": true,
+            "audiences": {
+              "mobile": [
+                "chat",
+                "chatEnabled"
+              ],
+              "web": [
+                "assistant"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "home_hero",
+            "kind": "experiment",
+            "type": "string",
+            "values": [
+              "control",
+              "savings"
+            ],
+            "default": "control",
+            "audiences": {
+              "mobile": [
+                "homeHero"
+              ]
+            },
+            "min_client": {}
+          },
+          {
+            "key": "new_checkout",
+            "kind": "flag",
+            "type": "boolean",
+            "values": [
+              true,
+              false
+            ],
+            "default": false,
+            "audiences": {
+              "web": [
+                "newCheckout"
+              ]
+            },
+            "min_client": {},
+            "permanent": false,
+            "remove_by": "2027-06-01",
+            "final": true
+          }
+        ],
+        "tombstones": [
+          {
+            "key": "banner_v1",
+            "removed": "2026-06-01",
+            "serve": {
+              "web": {
+                "banner": true
+              }
+            },
+            "until": "2026-12-31",
+            "until_clients": {}
+          },
+          {
+            "key": "chat_v1",
+            "removed": "2026-12-01",
+            "serve": {
+              "mobile": {
+                "chat_v1": false
+              }
+            },
+            "until": "2027-03-01",
+            "until_clients": {}
+          }
+        ],
+        "clients": {}
+      },
+      "expected": {
+        "status": "invalid",
+        "invalid": "committed"
+      }
+    },
+    {
       "name": "removed wires and type changes are reported together",
       "committed": {
         "version": 2,

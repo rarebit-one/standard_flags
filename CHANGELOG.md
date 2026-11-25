@@ -107,7 +107,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left out. The schema ships as `conformance/schema/manifest.schema.json`.
   `StandardFlags::Tooling::Manifest.read` reads version 1 and 2 files. It
   refuses what the schema rejects, plus a non-integer version, non-calendar
-  dates and a wire listed twice for one audience. `#digest` is the SHA-256
+  dates (a flag's `remove_by` included) and a wire listed twice for one
+  audience. A version 2 tombstone's `serve` needs `until_clients` as well as
+  `until`. `#digest` is the SHA-256
   of the canonical render. The JSON layout is pinned by explicit generator
   options.
 - **`standard_flags:manifest:check BASE= [BASE_OPTIONAL=1]`** for server
@@ -159,7 +161,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interfaces and types are unchanged.
 - **Conformance:**
   - `conformance/wire/manifest_check.json` (suite `manifest_check`, scope
-    `wire`, 26 cases). Each case takes a committed and a current manifest
+    `wire`, 30 cases). Each case takes a committed and a current manifest
     plus today's date. It expects `invalid` (naming the manifest to refuse),
     or ok/stale/breaking with removed wires, type changes and audiences made
     private. A client's contract check shares these semantics.
@@ -167,9 +169,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     literals, single quotes, unquoted keys, malformed numbers, trailing
     commas, raw control characters, invalid escapes, and nesting beyond the
     new `limits.max_nesting` (100), and lone or reversed surrogate escapes. It
-    also gains a version rule: a
-    `metadata.version` is kept only when it is printable ASCII without a
-    space or `"`.
+    also gains a version rule: a `metadata.version` is kept only when it is
+    1 to 256 characters of printable ASCII without a space or `"`, so an
+    oversized version can't wedge If-None-Match requests.
 
 ### Changed
 

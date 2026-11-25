@@ -6,8 +6,9 @@ require "json"
 # runs this outside its specs.
 class ClientStateReference
   # A version is sent back quoted in If-None-Match, so only an ETag's
-  # characters are kept: printable ASCII other than space and `"`.
-  VERSION = /\A[\x21\x23-\x7E]+\z/
+  # characters are kept (printable ASCII other than space and `"`), and at
+  # most 256 of them, well under any proxy's header limit.
+  VERSION = /\A[\x21\x23-\x7E]{1,256}\z/
 
   attr_reader :version
 

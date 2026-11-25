@@ -105,11 +105,14 @@ module StandardFlags
       end
 
       # A Document from a JSON String or an already-parsed Hash. Raises
-      # Unreadable for anything conformance/schema/manifest.schema.json
-      # rejects, and for what a schema can't say: a version written as a
-      # non-integer (`2.0`), dates that aren't calendar dates, and a wire
-      # listed twice for one audience (by two flags, a flag and a tombstone,
-      # or twice in one list), which the registry never writes.
+      # Unreadable for the rules conformance/README.md lists under "Invalid
+      # manifests": the required members and their types, a version written
+      # as a non-integer (`2.0`), dates that aren't calendar dates, `serve`
+      # without `until` and `until_clients`, and a wire listed twice for one
+      # audience (by two flags, a flag and a tombstone, or twice in one
+      # list). The rest of conformance/schema/manifest.schema.json (key
+      # patterns, `kind`, `min_client`, unlisted members) describes what the
+      # writer emits and isn't checked here.
       def self.read(source)
         data = source.is_a?(String) ? JSON.parse(source) : source
         raise Unreadable, "the manifest is not a JSON object" unless data.is_a?(Hash)
@@ -180,6 +183,7 @@ module StandardFlags
         end
         list(data, "flags").each do |flag|
           key = string!(flag, "key")
+          date!(flag["remove_by"], "flag #{key} remove_by") if flag.key?("remove_by")
           type = flag_type(data["version"], flag)
           flag_wires(data["version"], flag).each do |audience, names|
             names.each do |name|
@@ -198,6 +202,9 @@ module StandardFlags
           serve = tombstone["serve"]
           raise Unreadable, "tombstone #{key} serve is not a non-empty object" unless serve.is_a?(Hash) && !serve.empty?
           raise Unreadable, "tombstone #{key} serve needs until (the last day its wires are served)" unless tombstone.key?("until")
+          if data["version"] >= 2 && !tombstone["until_clients"].is_a?(Hash)
+            raise Unreadable, "tombstone #{key} serve needs until_clients (an object, {} when there are none)"
+          end
 
           last = date!(tombstone["until"], "tombstone #{key} until")
           serve.each do |audience, statics|

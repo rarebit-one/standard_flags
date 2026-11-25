@@ -130,11 +130,15 @@ send an object with a repeated member name, so how a client reads one is not
 pinned.
 
 **Accepting a payload.** The client remembers `metadata.version` when it is
-a non-empty string whose every character is printable ASCII other than a
+a string of 1 to 256 characters, every one printable ASCII other than a
 space or a double quote (U+0021, U+0023 to U+007E: what an ETag may hold),
 else null, and sends it quoted as If-None-Match next time. A version with
-CR or LF, a space, `"` or a non-ASCII character is not kept. A
-304 changes nothing, even before any payload. Keys the client doesn't
+CR or LF, a space, `"` or a non-ASCII character is not kept, nor is an
+empty one or one longer than 256 characters: a version is sent back in a
+request header, and an oversized one could be refused by every proxy on
+the way. Servers send far shorter versions (a digest). The same rule
+applies to a version read back from a stored payload, and to an ETag
+response header (neither is pinned by a case). A 304 changes nothing, even before any payload. Keys the client doesn't
 declare are ignored.
 
 **Reading a key.** An entry's value is *usable* when all of these hold:
@@ -215,7 +219,8 @@ baseline a client was built against), a `current` one and a `today` date
 (the case's, else the file's), all in UTC. A case expecting `"status":
 "invalid"` names the manifest (`committed` or `current`) a reader must
 refuse, and expects nothing else. The manifests are version 2 and
-validate against [`schema/manifest.schema.json`](schema/manifest.schema.json).
+validate against [`schema/manifest.schema.json`](schema/manifest.schema.json),
+apart from the manifest an `invalid` case names.
 The one case committing a version 1 manifest is `"scope": "server"`.
 
 A wire is an (audience, wire name) pair. A manifest tells an audience a wire
@@ -229,11 +234,39 @@ in one of two ways:
 
 The rules:
 
-- **Invalid manifests.** Besides what `schema/manifest.schema.json` rejects,
-  a reader refuses a `version` that isn't the integer 2, a date that isn't a
-  calendar date (`2027-02-30`), a tombstone `serve` without `until`, and a
-  wire listed twice for one audience (by two flags, twice in one list, or by
-  a flag and a tombstone).
+- **Invalid manifests.** A reader refuses at least what the server's
+  reader refuses (the `invalid` cases pin a sample):
+  - text that isn't strict JSON (a trailing comma, say), and an object with
+    a repeated member name (the server refuses one when its JSON parser
+    reports it, as json 3.1 and later do);
+  - a `version` that isn't the integer 2 (`2.0` included);
+  - a missing `audiences`, `flags`, `tombstones` or `clients`
+    (`{"version":2}` is not an empty manifest);
+  - `audiences` that isn't an object, or an audience whose `public` isn't
+    true or false;
+  - `flags` or `tombstones` that isn't an array of objects, or an entry
+    without a non-empty string `key`;
+  - a flag whose `type` isn't `boolean` or `string`; whose `values` aren't
+    at least two unique values of that type; whose `default` (or any value
+    of a `default` object) or `final` isn't of that type; or whose
+    `audiences` isn't an object of non-empty arrays of strings;
+  - a date that isn't a calendar date (`2027-02-30`) in a tombstone's
+    required `removed`, its `until`, a flag's `remove_by` or a client's
+    `since`;
+  - a tombstone `until` or `until_clients` without `serve`; a `serve` that
+    isn't a non-empty object of objects, serves anything but true, false
+    or a string, or comes without both `until` and `until_clients`;
+  - `clients` that isn't an object of objects holding exactly the
+    registry's fields, typed as the server writes them (`platform` a
+    non-empty string; `group`, `min_version`, `recommended`, `available`
+    and `store_url` a string or null; `grace` a whole number of days at
+    least 0; `store_lookup` true or false);
+  - a wire listed twice for one audience (by two flags, twice in one list,
+    or by a flag and a tombstone).
+
+  The rest of the schema (key and wire-name patterns, `kind`,
+  `min_client`, members it doesn't list) describes what the server writes;
+  a reader may refuse those too but isn't required to.
 - **`stale`** is true when the two manifests differ as JSON values,
   compared structurally: object member order is ignored, array order (wires,
   values, flags, tombstones) is significant. The server task compares the
