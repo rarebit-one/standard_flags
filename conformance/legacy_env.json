@@ -33,6 +33,12 @@
       "expected": { "value": true, "variant": "on", "reason": "ENV_PIN", "source_env_var": "ACME_REPORTS_ENABLED" } },
     { "name": "later legacy name is read when earlier ones are unset", "flag": "new_reports", "environment": "production",
       "env_vars": { "ACME_REPORTS_V2": "on" },
-      "expected": { "value": true, "variant": "on", "reason": "ENV_PIN", "source_env_var": "ACME_REPORTS_V2" } }
+      "expected": { "value": true, "variant": "on", "reason": "ENV_PIN", "source_env_var": "ACME_REPORTS_V2" } },
+    { "name": "legacy names are read by the strict parser: trimmed and case-insensitive", "flag": "new_reports", "environment": "production",
+      "env_vars": { "ACME_REPORTS_ENABLED": " Yes " },
+      "expected": { "value": true, "variant": "on", "reason": "ENV_PIN", "source_env_var": "ACME_REPORTS_ENABLED" } },
+    { "name": "a blank legacy value is unset", "flag": "new_reports", "environment": "production",
+      "env_vars": { "ACME_REPORTS_ENABLED": " ", "ACME_REPORTS_V2": "off" },
+      "expected": { "value": false, "variant": "off", "reason": "ENV_PIN", "source_env_var": "ACME_REPORTS_V2" } }
   ]
 }

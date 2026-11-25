@@ -276,25 +276,6 @@
         "inverted": {
           "type": "boolean"
         },
-        "legacy_parser": {
-          "enum": [
-            "strict",
-            "exact"
-          ]
-        },
-        "legacy_true": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ]
-        },
         "forbidden_in": {
           "oneOf": [
             {

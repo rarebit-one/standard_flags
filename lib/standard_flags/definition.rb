@@ -16,8 +16,8 @@ module StandardFlags
       shadow: %i[off shadow enforce]
     }.freeze
 
-    COMMON_ATTRIBUTES = %i[owner description default env inverted legacy_parser legacy_true forbidden_in fail
-                           expose min_client unit].freeze
+    COMMON_ATTRIBUTES = %i[owner description default env inverted forbidden_in fail expose min_client
+                           unit].freeze
     ATTRIBUTES = {
       flag: COMMON_ATTRIBUTES + %i[remove_by final permanent bucketing],
       kill_switch: COMMON_ATTRIBUTES,
@@ -31,12 +31,9 @@ module StandardFlags
     WIRE_FORMAT = /\A[A-Za-z][A-Za-z0-9_]*\z/
     HASH_VERSIONS = [ 1, 2 ].freeze
 
-    # How legacy `env:` values are read. :strict is the one strict parser;
-    # :exact reproduces a hand-written `ENV["X"] == "on"` reader. Neither
-    # applies to the canonical STANDARD_FLAGS_<KEY> pin, which is always
-    # strict.
-    LEGACY_PARSERS = %i[strict exact].freeze
-    DEFAULT_LEGACY_TRUE = %w[on].freeze
+    # Attributes removed in 0.4.0. Declaring one raises ArgumentError naming
+    # the replacement rather than the generic unknown-attribute error.
+    REMOVED_ATTRIBUTES = %i[legacy_parser legacy_true].freeze
 
     # A declared `bucketing: { version:, salt: }`, for a flag migrated from
     # another system that must keep its old buckets. Copied into the flag's
@@ -45,13 +42,14 @@ module StandardFlags
 
     attr_reader :key, :kind, :owner, :description, :env, :inverted, :forbidden_in,
                 :expose, :exposure, :min_client, :unit, :remove_by, :final, :values, :variants, :permanent,
-                :bucketing, :legacy_parser, :legacy_true, :until_clients
+                :bucketing, :until_clients
 
     def initialize(kind, key, attributes)
       @kind = kind.to_sym
       raise DefinitionError, "unknown flag kind #{kind.inspect}" unless KINDS.include?(@kind)
 
       @key = normalize_key(key)
+      check_removed_attributes!(attributes)
       check_attributes!(attributes)
       assign(attributes)
       validate!
@@ -204,6 +202,18 @@ module StandardFlags
       key.to_sym
     end
 
+    # legacy_parser: :exact read legacy env: names the way a hand-written
+    # `ENV["X"] == "on"` reader did. Every env name is now read by the one
+    # strict parser, so the canonical pin replaces it.
+    def check_removed_attributes!(attributes)
+      removed = attributes.keys.map(&:to_sym) & REMOVED_ATTRIBUTES
+      return if removed.empty?
+
+      raise ArgumentError,
+            "#{kind} :#{key} declares #{removed.map { |name| "#{name}:" }.join(' and ')}, removed in 0.4.0. " \
+            "Set the canonical #{canonical_env_var} instead; the strict parser reads it."
+    end
+
     def check_attributes!(attributes)
       unknown = attributes.keys.map(&:to_sym) - ATTRIBUTES.fetch(kind)
       return if unknown.empty?
@@ -217,9 +227,6 @@ module StandardFlags
       @description = attributes[:description]&.to_s
       @env = Array(attributes[:env]).map(&:to_s).freeze
       @inverted = attributes.fetch(:inverted, false)
-      @legacy_parser = attributes.fetch(:legacy_parser, :strict)
-      @legacy_parser = @legacy_parser.to_sym if @legacy_parser.respond_to?(:to_sym)
-      @legacy_true = normalize_legacy_true(attributes)
       @forbidden_in = Array(attributes[:forbidden_in]).map(&:to_s).freeze
       @exposure = normalize_expose(attributes[:expose])
       @expose = @exposure.transform_values(&:first).freeze
@@ -241,7 +248,6 @@ module StandardFlags
       fail!("is missing owner:") if owner.nil? || owner.strip.empty?
       validate_lifecycle!
       validate_env!
-      validate_legacy_parser!
       validate_forbidden_in!
       fail!("bucketing: needs a unit: to bucket") if bucketing && unit.nil?
     end
@@ -283,27 +289,6 @@ module StandardFlags
 
         fail!("defaults to #{default_for(env_name).inspect} in #{env_name}, where it is forbidden_in:")
       end
-    end
-
-    def validate_legacy_parser!
-      fail!("legacy_parser: must be one of #{LEGACY_PARSERS.inspect}") unless LEGACY_PARSERS.include?(legacy_parser)
-      fail!("legacy_parser: needs a legacy env: name") if legacy_parser == :exact && env.empty?
-      return if @legacy_true.nil? || @legacy_true.equal?(DEFAULT_LEGACY_TRUE)
-
-      fail!("legacy_true: needs legacy_parser: :exact") unless legacy_parser == :exact
-      fail!("legacy_true: only applies to on/off kinds") unless boolean?
-      return unless @legacy_true.empty? || @legacy_true.any? { |word| word.strip.empty? }
-
-      fail!("legacy_true: must list at least one non-blank value")
-    end
-
-    # The exact legacy values that mean on, for an on/off kind read with
-    # `legacy_parser: :exact`; nil otherwise (unless declared, so validation
-    # can reject it).
-    def normalize_legacy_true(attributes)
-      return Array(attributes[:legacy_true]).map(&:to_s).freeze if attributes.key?(:legacy_true)
-
-      DEFAULT_LEGACY_TRUE if @legacy_parser == :exact && boolean?
     end
 
     def invalid_variants?

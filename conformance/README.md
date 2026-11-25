@@ -21,7 +21,7 @@ versions passed outside SemVer).
 
 | File | Suite | Scope | In → out |
 |---|---|---|---|
-| `resolution.json`, `guards_and_errors.json`, `legacy_env.json`, `legacy_exact.json`, `permanent_flags.json` | `evaluation` | server | registry, environment, env vars → value, variant, reason, error code, deciding variable |
+| `resolution.json`, `guards_and_errors.json`, `legacy_env.json`, `permanent_flags.json` | `evaluation` | server | registry, environment, env vars → value, variant, reason, error code, deciding variable |
 | `runtime/*.json` | `runtime` | server | stored rule, cohorts, memberships, context → evaluation and `rule_id` |
 | `operations/write_path.json` | `operations` | server | operations applied in order → evaluations |
 | `bucket_vectors.json` | `bucket_vectors` | server | salt, unit key, decision → bucket |
