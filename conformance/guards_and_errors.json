@@ -1,5 +1,7 @@
 {
   "description": "forbidden_in guards, which run before ENV pins, and fail-safe results for unknown and removed keys outside strict mode.",
+  "suite": "evaluation",
+  "scope": "server",
   "registry": {
     "flags": [
       { "kind": "flag", "key": "demo_data", "owner": "platform", "remove_by": "2027-01-01", "final": false,

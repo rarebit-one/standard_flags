@@ -17,7 +17,7 @@ module StandardFlags
     }.freeze
 
     COMMON_ATTRIBUTES = %i[owner description default env inverted legacy_parser legacy_true forbidden_in fail
-                           expose unit].freeze
+                           expose min_client unit].freeze
     ATTRIBUTES = {
       flag: COMMON_ATTRIBUTES + %i[remove_by final permanent bucketing],
       kill_switch: COMMON_ATTRIBUTES,
@@ -44,8 +44,8 @@ module StandardFlags
     Bucketing = Data.define(:version, :salt)
 
     attr_reader :key, :kind, :owner, :description, :env, :inverted, :forbidden_in,
-                :expose, :unit, :remove_by, :final, :values, :variants, :permanent, :bucketing,
-                :legacy_parser, :legacy_true
+                :expose, :exposure, :min_client, :unit, :remove_by, :final, :values, :variants, :permanent,
+                :bucketing, :legacy_parser, :legacy_true
 
     def initialize(kind, key, attributes)
       @kind = kind.to_sym
@@ -146,12 +146,38 @@ module StandardFlags
       forbidden_in.include?(env_name.to_s)
     end
 
+    # The wire name `audience` sees (the first one listed when it has
+    # aliases), or nil when the flag isn't exposed to it.
     def wire_name(audience)
       expose[audience.to_sym]
     end
 
+    # Every wire name `audience` sees, in declared order: one, or several
+    # aliases that all serve the same evaluation. Empty when not exposed.
+    def wire_names(audience)
+      exposure.fetch(audience.to_sym, [])
+    end
+
     def audiences
       expose.keys
+    end
+
+    # Whether a client may receive this flag, given `min_client:` (never set
+    # on a kill switch). A flag
+    # without one goes to every client. With one, it goes to a client on a
+    # platform the declaration doesn't list, or on a listed platform at or
+    # above that minimum; an unknown platform, or a listed platform with an
+    # unknown version, never receives it.
+    def deliverable_to?(client)
+      return true if min_client.empty?
+
+      platform = client.platform
+      return false if platform.nil?
+
+      minimum = min_client[platform]
+      return true if minimum.nil?
+
+      !client.version.nil? && client.version >= minimum
     end
 
     # Permanent flags have no remove_by:, so they are never stale.
@@ -189,7 +215,9 @@ module StandardFlags
       @legacy_parser = @legacy_parser.to_sym if @legacy_parser.respond_to?(:to_sym)
       @legacy_true = normalize_legacy_true(attributes)
       @forbidden_in = Array(attributes[:forbidden_in]).map(&:to_s).freeze
-      @expose = normalize_expose(attributes[:expose])
+      @exposure = normalize_expose(attributes[:expose])
+      @expose = @exposure.transform_values(&:first).freeze
+      @min_client = normalize_min_client(attributes[:min_client])
       @unit = attributes[:unit]&.to_sym
       @remove_by = parse_date(attributes[:remove_by], :remove_by)
       @values = resolve_values(attributes)
@@ -313,6 +341,8 @@ module StandardFlags
       Bucketing.new(version: version, salt: salt.dup.freeze)
     end
 
+    # `{ audience => [wire, ...] }`. A Hash value may list several wire
+    # names (aliases) for one audience.
     def normalize_expose(expose)
       pairs =
         case expose
@@ -321,11 +351,28 @@ module StandardFlags
         else Array(expose).to_h { |audience| [ audience, key ] }
         end
 
-      pairs.to_h do |audience, wire|
-        wire = wire.to_s
-        fail!("expose: wire name #{wire.inspect} must match #{WIRE_FORMAT.inspect}") unless wire.match?(WIRE_FORMAT)
-        [ audience.to_sym, wire ]
+      pairs.to_h do |audience, wires|
+        wires = (wires.is_a?(Array) ? wires : [ wires ]).map(&:to_s)
+        fail!("expose: lists no wire name for :#{audience}") if wires.empty?
+        wires.each do |wire|
+          fail!("expose: wire name #{wire.inspect} must match #{WIRE_FORMAT.inspect}") unless wire.match?(WIRE_FORMAT)
+        end
+        fail!("expose: lists a wire name twice for :#{audience}") unless wires.uniq.size == wires.size
+        [ audience.to_sym, wires.freeze ]
       end.freeze
+    end
+
+    # `{ "platform" => Version }`: the oldest client build per platform that
+    # may receive this flag.
+    def normalize_min_client(min_client)
+      return {}.freeze if min_client.nil?
+      fail!("min_client: must be a Hash of platform => version") unless min_client.is_a?(Hash)
+      fail!("min_client: only applies to a flag with expose:") if @exposure.empty?
+      # A withheld entry means the client's code default, which for a kill
+      # switch is "available": an old client would never see it pulled.
+      fail!("min_client: can't be used on a kill switch; a kill switch must reach every client") if kill_switch?
+
+      Definition.client_versions(min_client) { |message| fail!("min_client: #{message}") }
     end
 
     # Casts a declared value to this kind's type, raising for anything outside
@@ -352,6 +399,22 @@ module StandardFlags
 
     def fail!(message)
       raise DefinitionError, "#{kind} :#{key} #{message}"
+    end
+
+    # `{ platform => version }` (a min_client: or until_clients: Hash) as
+    # `{ "platform" => Version }`. Platforms must be in
+    # `config.client_platforms`; versions must parse. Yields a message and
+    # expects the block to raise.
+    def self.client_versions(pairs)
+      platforms = StandardFlags.config.client_platforms.map { |name| name.to_s.downcase }
+      yield "must name at least one platform" if pairs.empty?
+      pairs.to_h do |platform, version|
+        name = platform.to_s.downcase
+        yield "platform #{platform.inspect} is not one of config.client_platforms #{platforms.inspect}" unless platforms.include?(name)
+        parsed = version.is_a?(String) ? Version.parse(version) : nil
+        yield "#{version.inspect} for #{name} is not a version (\"0.4.0\")" if parsed.nil?
+        [ name.freeze, parsed ]
+      end.freeze
     end
   end
 end

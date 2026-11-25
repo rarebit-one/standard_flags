@@ -1,5 +1,7 @@
 {
   "description": "Permanent flags (kind flag, permanent: true): standing switches with no remove_by or final, defaulting off or on, that evaluate like any other flag, guards and pins included.",
+  "suite": "evaluation",
+  "scope": "server",
   "registry": {
     "flags": [
       { "kind": "flag", "key": "demo_pages", "owner": "platform", "permanent": true,

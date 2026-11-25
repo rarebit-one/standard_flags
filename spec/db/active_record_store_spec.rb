@@ -270,7 +270,7 @@ RSpec.describe "the ActiveRecord store on Postgres", :db, registry: RuntimeHelpe
 
   describe "Bucket.sql_v2" do
     it "matches Bucket.v2 on Postgres for every v2 vector" do
-      vectors = ConformanceRegistry.load(File.expand_path("../fixtures/conformance/bucket_vectors.json", __dir__))
+      vectors = ConformanceRegistry.load(ConformanceRegistry.path("bucket_vectors.json"))
                                    .fetch("vectors").select { |v| v["version"] == 2 }
       expect(vectors.size).to be > 10
       connection = ActiveRecord::Base.connection

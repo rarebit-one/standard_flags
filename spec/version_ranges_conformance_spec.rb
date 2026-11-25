@@ -1,11 +1,11 @@
 require "spec_helper"
 
-# Runs spec/fixtures/conformance/versions/version_ranges.json: a version and
+# Runs conformance/versions/version_ranges.json: a version and
 # a range in, matched or not out. Clients (Kotlin, TypeScript) run the same
 # file, so every side agrees on what a version range means. Only the neutral
 # syntax is portable, so this reads ranges with VersionRange.neutral.
 RSpec.describe "version range conformance fixtures" do
-  fixture = ConformanceRegistry.load(File.expand_path("fixtures/conformance/versions/version_ranges.json", __dir__))
+  fixture = ConformanceRegistry.load(ConformanceRegistry.path("versions/version_ranges.json"))
 
   fixture.fetch("cases").each do |example|
     it "#{example['version'].inspect} against #{example['range'].inspect} is #{example['matched'] ? 'matched' : 'not matched'}" do

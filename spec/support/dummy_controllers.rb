@@ -149,3 +149,97 @@ class TargetedController < DummyBaseController
     render plain: "own #{error.feature}", status: 451
   end
 end
+
+# OFREP. The app authenticates (a bearer token naming the account here) and
+# draws the routes; the mixin serves them.
+module DummyBearerAuth
+  extend ActiveSupport::Concern
+
+  included do
+    before_action :authenticate!
+  end
+
+  private
+
+  def bearer_account
+    token = request.authorization.to_s.delete_prefix("Bearer ").strip
+    token unless token.empty?
+  end
+
+  def authenticate!
+    head :unauthorized unless bearer_account
+  end
+
+  def standard_flags_context
+    StandardFlags::Context.new(actors: { account: bearer_account })
+  end
+end
+
+class OfrepFlagsController < DummyBaseController
+  include DummyBearerAuth
+  include StandardFlags::OFREP::Controller
+
+  standard_flags_ofrep audience: :mobile, csrf: :skip
+end
+
+# Keeps Rails' CSRF check: clients must send the token.
+class OfrepCsrfProtectedController < DummyBaseController
+  include DummyBearerAuth
+  include StandardFlags::OFREP::Controller
+
+  standard_flags_ofrep audience: :mobile, csrf: :protect
+end
+
+# Forgery protection declared after the mixin: caught on the first request.
+class OfrepLateCsrfController < ActionController::Base
+  include StandardFlags::OFREP::Controller
+
+  standard_flags_ofrep audience: :mobile
+  protect_from_forgery with: :exception
+end
+
+# An app handler for StandardError declared after the mixin.
+class OfrepRescuingController < ActionController::API
+  include DummyBearerAuth
+  include StandardFlags::OFREP::Controller
+
+  standard_flags_ofrep audience: :mobile
+  rescue_from StandardError, with: :render_500
+
+  private
+
+  def render_500(_error)
+    render json: { error: "internal" }, status: 500
+  end
+end
+
+class OfrepApiController < ActionController::API
+  include DummyBearerAuth
+  include StandardFlags::OFREP::Controller
+
+  standard_flags_ofrep audience: :mobile
+
+  before_action { response.headers["Vary"] = "Accept-Encoding, accept" }
+end
+
+class OfrepPreAuthController < DummyBaseController
+  include StandardFlags::OFREP::Controller
+
+  standard_flags_ofrep audience: :pre_auth, anonymous: true, csrf: :skip
+
+  private
+
+  def standard_flags_context
+    raise "an anonymous OFREP controller must not ask who is signed in"
+  end
+end
+
+class OfrepUnconfiguredController < DummyBaseController
+  include StandardFlags::OFREP::Controller
+end
+
+class BootstrapController < DummyBaseController
+  def show
+    render json: { profile: {}, features: standard_flags_payload(:mobile, format: :ofrep) }
+  end
+end

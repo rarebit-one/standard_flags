@@ -84,9 +84,11 @@ module StandardFlags
       end
     end
 
-    # The payload for one audience, evaluated for this request's context.
-    def standard_flags_payload(audience)
-      StandardFlags.payload(audience, for: standard_flags_request_context)
+    # The payload for one audience, evaluated for this request's context
+    # and client: flat by default, or `format: :ofrep` for an embed in a
+    # bootstrap response (see StandardFlags.payload).
+    def standard_flags_payload(audience, format: :flat)
+      StandardFlags.payload(audience, for: standard_flags_request_context, format: format)
     end
 
     private

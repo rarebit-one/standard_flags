@@ -1,10 +1,10 @@
 require "spec_helper"
 
-# Runs spec/fixtures/conformance/versions/legacy_ranges.json, the server-only
+# Runs conformance/versions/legacy_ranges.json, the server-only
 # contract for version ranges stored by 0.2.x in RubyGems syntax: each case
 # must agree with Gem::Requirement, and with what VersionRange reads.
 RSpec.describe "legacy version range fixtures" do
-  fixture = ConformanceRegistry.load(File.expand_path("fixtures/conformance/versions/legacy_ranges.json", __dir__))
+  fixture = ConformanceRegistry.load(ConformanceRegistry.path("versions/legacy_ranges.json"))
 
   it "is server-only" do
     expect(fixture.fetch("scope")).to eq("server")

@@ -44,13 +44,14 @@ module StandardFlags
       @target = target
       @env = env&.to_s
       @client = Client.wrap(client)
-      @cache_key = [
-        @env,
-        identity(@target),
-        @actors.sort.map { |unit, actor| [ unit, identity(actor) ] },
-        @client.to_h.sort
-      ].freeze
+      @cache_key = build_cache_key.freeze
       freeze
+    end
+
+    # Whether this is a request made before authentication (an
+    # AnonymousContext).
+    def anonymous?
+      false
     end
 
     # The same context for another client.
@@ -80,6 +81,15 @@ module StandardFlags
 
     private
 
+    def build_cache_key
+      [
+        @env,
+        identity(@target),
+        @actors.sort.map { |unit, actor| [ unit, identity(actor) ] },
+        @client.to_h.sort
+      ]
+    end
+
     # An unsaved record (nil id) falls back to object identity, so two of
     # them never share a memoised answer.
     def identity(object)
@@ -89,6 +99,32 @@ module StandardFlags
         id = object.id if object.respond_to?(:id)
         [ object.class.name, id.nil? ? object.object_id : id ]
       end
+    end
+  end
+
+  # The context of a request made before authentication (an `anonymous:
+  # true` OFREP controller, through Delivery.build_anonymous): no actors, no
+  # target, only the client. Runtime rules skip segment conditions for it,
+  # since an app's segment resolver may read the signed-in user. It never
+  # shares a memoised answer with an ordinary context.
+  class AnonymousContext < Context
+    def initialize(client: {})
+      super(client: client)
+    end
+
+    def anonymous?
+      true
+    end
+
+    def with_client(client)
+      client = Client.wrap(client)
+      client == self.client ? self : self.class.new(client: client)
+    end
+
+    private
+
+    def build_cache_key
+      [ :anonymous, *super ]
     end
   end
 end

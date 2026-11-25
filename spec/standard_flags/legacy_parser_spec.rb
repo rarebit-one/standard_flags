@@ -1,7 +1,7 @@
 require "spec_helper"
 
 # `legacy_parser: :exact`. Evaluation cases live in
-# spec/fixtures/conformance/legacy_exact.json; these cover validation and the
+# conformance/legacy_exact.json; these cover validation and the
 # side of the scan the fixtures don't see.
 RSpec.describe StandardFlags::Definition, "#legacy_parser" do
   def build(kind, key = :purge_inactive, **attributes)

@@ -66,8 +66,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server-only `versions/legacy_ranges.json`. Every existing
   runtime case with a version range also runs with the range in canonical
   neutral form.
+- **Client delivery.** `StandardFlags::Delivery.build(audience, context)`
+  returns OFREP evaluation entries (`key` = wire name, `value`, `variant`,
+  `reason`; OFREP's `errorCode`/`errorDetails` for a flag whose evaluation
+  failed) for every wire the audience is told about, plus tombstones'
+  static wires, and an ETag: the SHA-256 of the audience and the canonical
+  JSON of the entries, never the config revision. No flag keys, rule IDs,
+  env var names, unit keys or unexposed flags.
+- **OFREP endpoint mixin.** `StandardFlags::OFREP::Controller`
+  (`ActionController::API`, or `::Base` with an explicit
+  `csrf: :skip | :protect`; leaving it out raises
+  `StandardFlags::ConfigurationError`) with `standard_flags_ofrep audience:`
+  serves `ofrep_evaluate_flags` (bulk, with ETag, 304 on If-None-Match,
+  `Cache-Control: no-cache, private` and a Vary on Authorization and the
+  client headers) and `ofrep_evaluate_flag` (one wire, with a strong ETag;
+  404 FLAG_NOT_FOUND for anything the audience isn't told). The app draws
+  the routes and authenticates. Units come from `standard_flags_context`,
+  never the body's `targetingKey`; the body only adds client attributes,
+  headers win, and with `read_client_headers` off neither counts. Before
+  Rails parses anything, the mixin answers a non-JSON Content-Type 415 and
+  an oversized (64 KiB, bounded read), non-UTF-8 or malformed body 400
+  INVALID_CONTEXT, outside the rescue chain. Validated against the OFREP
+  OpenAPI document 0.4.0.
+- **Embeds.** `StandardFlags.payload(audience, for:, client:, format: :ofrep)`
+  and `standard_flags_payload(audience, format: :ofrep)` return the bulk
+  body (`{ "flags", "metadata" => { "version" => etag } }`) for bootstrap
+  responses, device check-ins and MCP whoami. The flat format stays the
+  default.
+- **`expose:` aliases.** An audience may list several wire names for one
+  flag (`expose: { mobile: %i[chat_enabled insights_enabled] }`), each
+  serving the same evaluation. `Definition#wire_names`, `Registry#wires`.
+  The manifest keeps `audiences` (first wire, as in version 1) and adds
+  `wires` for flags with aliases; the TypeScript interfaces list every alias.
+- **`min_client:`** (`{ platform => "version" }`) leaves a flag out of
+  OFREP payloads for clients on a listed platform below the minimum, of
+  unknown version, or with no (or an unrecognised) platform. Refused on a
+  kill switch, which must reach every client.
+- **Deprecated wires.** `tombstone ..., serve: { audience => { wire =>
+  value } }, until: "YYYY-MM-DD", until_clients: { platform => "version" }`
+  keeps a removed flag's client wires answering a static value (reason
+  STATIC) through `until:` (required; a UTC date), and only for clients
+  below `until_clients:`. `flags:stale` lists a `serve:` block past
+  `until:` as removable. The manifest doesn't list tombstones' static wires
+  or `min_client:` yet: the version 2 manifest (next release) adds both.
+- **`config.audiences`**: the audiences an app serves (an Array, or a Hash
+  with `public:` and `unit:`). When set, undeclared `expose:`/`serve:`
+  audiences fail boot. A `public: true` audience is the only kind an
+  `anonymous: true` OFREP controller serves, evaluated with no actors
+  (`StandardFlags::AnonymousContext`; runtime rules skip segments for it),
+  the audience's `unit:` keyed by the body's `targetingKey` (use random,
+  unguessable install IDs: pre-auth answers are public). A public flag whose
+  rule has members or cohorts logs `public_targeting.standard_flags` when
+  rules load and shows in the diagnostics.
+- `Client.from_context(fields)` checks OpenFeature context fields like
+  headers; the OpenFeature provider and the OFREP body share
+  `Client::CONTEXT_FIELDS`.
 
 ### Changed
+
+- **The conformance suite moved to a top-level `conformance/` folder and
+  ships in the gem**, with a JSON Schema (`conformance/schema/fixture.schema.json`)
+  every fixture validates against and a README. Each file is tagged `suite`
+  and `scope` (`server` or `wire`). New wire suites: `wire/delivery.json`
+  (context in, OFREP entries and ETag out) and `wire/client_state.json`
+  (payloads in, client reads out), which Kotlin and TypeScript clients can
+  run without Ruby.
 
 - Client conditions in runtime rules compare with `StandardFlags::Version`
   and `VersionRange`. Ranges stored by 0.2.x that only RubyGems can read

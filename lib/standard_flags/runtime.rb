@@ -136,7 +136,7 @@ module StandardFlags
           store: store.class.name,
           ready: readiness == true,
           unreachable: (readiness unless readiness == true || readiness == false),
-          warnings: store_warnings,
+          warnings: store_warnings + public_targeting(registry, snapshot).map { |found| public_targeting_message(found) },
           loaded: snapshot.loaded,
           stale: snapshot.stale,
           revision: snapshot.revision,
@@ -206,6 +206,41 @@ module StandardFlags
         end
       end
 
+      # `[{ key:, audience: }, ...]` for flags exposed to a public audience
+      # whose stored rule has members or attached cohorts. Pre-auth answers
+      # are public: anyone who knows (or guesses) an install key reads what
+      # it gets, so a membership there is visible to the world.
+      def public_targeting(registry, snapshot)
+        declared = StandardFlags.config.audiences
+        return [] if declared.nil?
+
+        public = declared.values.select(&:public?).map(&:name)
+        return [] if public.empty?
+
+        snapshot.rules.values.sort_by(&:key).filter_map do |rule|
+          definition = registry[rule.key]
+          audience = definition && (definition.audiences & public).first
+          next unless audience && targeted?(rule)
+
+          { key: rule.key, audience: audience }
+        end
+      end
+
+      def public_targeting_message(found)
+        ":#{found[:key]} is exposed to public audience :#{found[:audience]} and its runtime rule has members or " \
+          "cohorts; pre-auth answers are public, so use unguessable install keys"
+      end
+
+      # Logs (through the `public_targeting.standard_flags` event) each flag
+      # public_targeting finds, once per process, whenever rules load.
+      def warn_public_targeting(snapshot)
+        public_targeting(StandardFlags.registry, snapshot).each do |found|
+          Reporting.once(:public_targeting, found[:key]) { Reporting.instrument(:public_targeting, found) }
+        end
+      rescue StandardError
+        nil
+      end
+
       private
 
       def now
@@ -252,6 +287,12 @@ module StandardFlags
         Array(store.warnings)
       rescue StandardError
         []
+      end
+
+      def targeted?(rule)
+        rule.members? || rule.cohort_attachments.any?
+      rescue StandardError
+        false
       end
 
       def rule_status(registry, rule)

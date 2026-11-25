@@ -1,5 +1,7 @@
 {
   "description": "Code defaults per environment and canonical STANDARD_FLAGS_<KEY> pins for every kind.",
+  "suite": "evaluation",
+  "scope": "server",
   "registry": {
     "flags": [
       { "kind": "flag", "key": "new_checkout", "owner": "payments", "remove_by": "2027-01-01", "final": true,

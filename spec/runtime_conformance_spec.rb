@@ -1,11 +1,11 @@
 require "spec_helper"
 require "time"
 
-# Runs every case in spec/fixtures/conformance/runtime: a stored rule, its
+# Runs every case in conformance/runtime: a stored rule, its
 # cohorts and memberships, and a context in; the evaluation out. Like the
 # other conformance fixtures, these are meant to run in every evaluator.
 RSpec.describe "runtime conformance fixtures" do
-  fixtures = Dir[File.expand_path("fixtures/conformance/runtime/*.json", __dir__)].sort
+  fixtures = Dir[ConformanceRegistry.path("runtime/*.json")].sort
 
   it "has fixture files" do
     expect(fixtures).not_to be_empty

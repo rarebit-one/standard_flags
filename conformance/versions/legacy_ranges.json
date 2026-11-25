@@ -1,4 +1,5 @@
 {
+  "suite": "legacy_ranges",
   "scope": "server",
   "description": "Server only (Ruby): how version ranges stored by 0.2.x in RubyGems syntax keep evaluating, exactly as Gem::Requirement does. translations give the neutral form a RubyGems requirement is stored as when written through SetConditions (null when the neutral syntax cannot hold it: more than three release segments, or a prerelease operand, which RubyGems orders differently from SemVer; such a range is stored as given and evaluated by RubyGems). cases give a stored range and a client version, matched or not; a client version outside SemVer is read by RubyGems against any range RubyGems can read. Clients never evaluate these. Ranges left to RubyGems follow the running RubyGems, as 0.2.2 did; expectations are those of the RubyGems this gem tests against.",
   "translations": [

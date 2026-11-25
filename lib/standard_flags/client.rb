@@ -35,6 +35,9 @@ module StandardFlags
     FIELDS = %i[platform version build].freeze
     # The platform of a client that sent one this app doesn't recognise.
     UNKNOWN_PLATFORM = "unknown".freeze
+    # The OpenFeature evaluation-context fields that carry the client, in
+    # order of preference (the OpenFeature provider and the OFREP body).
+    CONTEXT_FIELDS = { platform: %w[platform], version: %w[appVersion app_version], build: %w[build] }.freeze
     # Longest header value read.
     MAX_LENGTH = 128
 
@@ -61,10 +64,32 @@ module StandardFlags
       # `[]` with a header name: ActionDispatch's headers, a Rack env (read
       # as HTTP_X_CLIENT_PLATFORM and so on) or a plain Hash.
       def from_headers(headers)
+        names = StandardFlags.config.client_headers
+        validated(FIELDS.each_with_object({}) do |field, found|
+          name = names[field]&.to_s
+          found[field] = [ header(headers, name), name ] if name
+        end)
+      end
+
+      # The client an OpenFeature evaluation context's fields describe
+      # (`platform`, `appVersion` or `app_version`, `build`; see
+      # CONTEXT_FIELDS), checked exactly like headers: a bad version or build
+      # is dropped, an unrecognised platform becomes "unknown", and either
+      # emits `client_invalid.standard_flags`, whose `header` is the field
+      # name.
+      def from_context(fields)
+        validated(CONTEXT_FIELDS.each_with_object({}) do |(field, names), found|
+          name = names.find { |candidate| !fields[candidate].nil? }
+          found[field] = [ fields[name], name ] if name
+        end)
+      end
+
+      private
+
+      # `{ field => [raw value, where it came from] }` to a Client.
+      def validated(raw_values)
         config = StandardFlags.config
-        attributes = FIELDS.each_with_object({}) do |field, found|
-          name = config.client_headers[field]&.to_s
-          raw = name && header(headers, name)
+        attributes = raw_values.each_with_object({}) do |(field, (raw, source)), found|
           next if raw.nil?
 
           text = Version.clean(raw)
@@ -73,13 +98,11 @@ module StandardFlags
           value = text && normalize(field, text, config)
           next found[field] = value unless value.nil?
 
-          Reporting.instrument(:client_invalid, field: field, header: name)
+          Reporting.instrument(:client_invalid, field: field, header: source)
           found[field] = UNKNOWN_PLATFORM if field == :platform
         end
         attributes.empty? ? empty : new(attributes)
       end
-
-      private
 
       def header(headers, name)
         [ name, name.downcase, "HTTP_#{name.upcase.tr('-', '_')}" ].each do |candidate|

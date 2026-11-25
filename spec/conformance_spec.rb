@@ -1,10 +1,10 @@
 require "spec_helper"
 
-# Runs every case in spec/fixtures/conformance. The same files are meant to
+# Runs every case in conformance/ (shipped in the gem). The same files are meant to
 # run in every evaluator (Ruby here; Kotlin and TypeScript clients later), so
 # they can't drift apart on what a flag evaluates to.
 RSpec.describe "conformance fixtures" do
-  fixtures = Dir[File.expand_path("fixtures/conformance/*.json", __dir__)].sort
+  fixtures = Dir[ConformanceRegistry.path("*.json")].sort
 
   it "has fixture files" do
     expect(fixtures).not_to be_empty
@@ -32,7 +32,7 @@ RSpec.describe "conformance fixtures" do
   end
 
   describe "bucket_vectors.json" do
-    vectors = ConformanceRegistry.load(File.expand_path("fixtures/conformance/bucket_vectors.json", __dir__))
+    vectors = ConformanceRegistry.load(ConformanceRegistry.path("bucket_vectors.json"))
 
     vectors.fetch("vectors").each do |vector|
       label = [ "v#{vector['version']}", vector["decision"], vector["salt"].inspect, vector["unit_key"].inspect ]

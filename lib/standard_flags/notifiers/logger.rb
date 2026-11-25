@@ -42,6 +42,8 @@ module StandardFlags
           [ :warn, "report registry full (#{payload[:limit]} entries); new warnings are no longer reported in this process" ]
         when "client_invalid"
           [ :debug, "ignored #{payload[:header]}: not a valid client #{payload[:field]}" ]
+        when "public_targeting"
+          [ :warn, Runtime.public_targeting_message(payload) ]
         when "targeting_key_missing"
           [ :debug, "runtime rule for :#{payload[:key]} needs a :#{payload[:unit]} key and the context has none" ]
         end

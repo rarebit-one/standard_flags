@@ -32,6 +32,9 @@ RSpec/DescribeClass:
     - spec/version_ranges_conformance_spec.rb
     - spec/legacy_ranges_conformance_spec.rb
     - spec/runtime_neutral_ranges_conformance_spec.rb
+    - spec/wire_conformance_spec.rb
+    - spec/conformance_schema_spec.rb
+    - spec/standard_flags/exposure_spec.rb
     - spec/db/**/*
     - spec/integration/**/*
     - spec/standard_flags/notifiers_spec.rb
@@ -55,6 +58,8 @@ RSpec/LeakyLocalVariable:
     - spec/runtime_neutral_ranges_conformance_spec.rb
     - spec/legacy_ranges_conformance_spec.rb
     - spec/version_ranges_conformance_spec.rb
+    - spec/wire_conformance_spec.rb
+    - spec/conformance_schema_spec.rb
 
 Style/FrozenStringLiteralComment:
   Enabled: false

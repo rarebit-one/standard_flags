@@ -9,6 +9,7 @@ require "standard_flags/events"
 require "standard_flags/reason"
 require "standard_flags/evaluation"
 require "standard_flags/mode"
+require "standard_flags/audience"
 require "standard_flags/definition"
 require "standard_flags/registry"
 require "standard_flags/semantic_version"
@@ -28,6 +29,7 @@ require "standard_flags/reader"
 require "standard_flags/snapshot"
 require "standard_flags/sensor"
 require "standard_flags/payload"
+require "standard_flags/delivery"
 require "standard_flags/config"
 require "standard_flags/notifiers/logger"
 require "standard_flags/notifiers/sentry"
@@ -48,6 +50,9 @@ module StandardFlags
   autoload :Job, "standard_flags/job"
   autoload :PurgeJob, "standard_flags/purge_job"
   autoload :HealthCheck, "standard_flags/health_check"
+  # The OFREP controller mixin (actionpack); StandardFlags::OFREP itself is
+  # plain Ruby.
+  autoload :OFREP, "standard_flags/ofrep"
 
   class << self
     # Declares the app's flags, normally in config/flags.rb. Replaces the
@@ -146,8 +151,23 @@ module StandardFlags
       raise FeatureDisabled, key
     end
 
-    def payload(audience, for: nil)
-      Payload.build(registry, audience, Context.wrap(binding.local_variable_get(:for)))
+    # What `audience` is told, evaluated `for:` a target or context.
+    # `client:` (a Client or Hash) replaces the context's client.
+    #
+    # * `format: :flat` (the default): `{ wire_name => value }`, the Inertia
+    #   prop (StandardFlags::Payload).
+    # * `format: :ofrep`: OFREP's bulk response body,
+    #   `{ "flags" => [...], "metadata" => { "version" => etag } }`, with
+    #   `min_client:` and tombstones' static wires applied
+    #   (StandardFlags::Delivery), for bootstrap responses, device check-ins
+    #   and MCP whoami.
+    def payload(audience, for: nil, client: nil, format: :flat)
+      context = Context.wrap(binding.local_variable_get(:for), client: client)
+      case format
+      when :flat then Payload.build(registry, audience, context)
+      when :ofrep then Delivery.build(audience, context, registry: registry).to_h
+      else raise ArgumentError, "format: must be :flat or :ofrep, not #{format.inspect}"
+      end
     end
 
     # Reads the runtime memberships of many units in one query and memoises
@@ -163,8 +183,10 @@ module StandardFlags
       Runtime.preload(unit, records_or_keys)
     end
 
-    def payload_digest(audience, for: nil)
-      Payload.digest(payload(audience, for: binding.local_variable_get(:for)))
+    # The digest of the flat payload (an ETag for it). The OFREP format
+    # carries its own, as `metadata.version`.
+    def payload_digest(audience, for: nil, client: nil)
+      Payload.digest(payload(audience, for: binding.local_variable_get(:for), client: client))
     end
 
     private

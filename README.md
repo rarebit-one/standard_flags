@@ -15,7 +15,9 @@ in the app's own database, the audited operations that change them,
 [OpenFeature](#openfeature) provider. Unreleased on `main`:
 [client context](#client-context) (who is calling, from request headers),
 portable version ranges, build-number conditions, a raisable
-`FeatureDisabled` and flag-gated MCP tools. See [Roadmap](#roadmap).
+`FeatureDisabled`, flag-gated MCP tools and [client delivery](#client-delivery)
+(an OFREP endpoint mixin, bootstrap embeds, minimum client versions and
+deprecated wires). See [Roadmap](#roadmap).
 
 - [Install](#install)
 - [Declaring flags](#declaring-flags)
@@ -27,6 +29,7 @@ portable version ranges, build-number conditions, a raisable
 - [Controller and job guards](#controller-and-job-guards)
 - [Client context](#client-context)
 - [Client payload](#client-payload)
+- [Client delivery](#client-delivery)
 - [Rake tasks](#rake-tasks)
 - [Observability](#observability)
 - [Health check and diagnostics](#health-check-and-diagnostics)
@@ -107,7 +110,7 @@ end
 | `mode` | declared values | first value | Staged rollouts. Presets: `:sensor` (off/sensor/on), `:cutover` (off/allowlist/all), `:shadow` (off/shadow/enforce); or `values:`. May declare `remove_by:` with `final:`, or `permanent: true`. |
 | `experiment` | declared variants | first variant | Experiments. Resolves to its first variant (list `control` first) unless pinned by ENV or split by a runtime rule's variant weights. |
 | `compat` | on / off | on | Compatibility shims that stay on until they are removed. |
-| `tombstone` | — | — | A removed key. It can never be declared again. |
+| `tombstone` | — | — | A removed key. It can never be declared again. `serve:` keeps its client wires answering a static value for a while ([Deprecated wires](#deprecated-wires)). |
 
 ### Attributes
 
@@ -122,7 +125,8 @@ end
 | `legacy_true:` | With `legacy_parser: :exact` on an on/off kind, the exact values that mean on. Default `%w[on]`. |
 | `forbidden_in:` | Environment name(s) where the flag is forced off. A pin that tries to turn it on is reported once per process. |
 | `fail:` | The value returned if evaluation raises. Kill switches default to on. |
-| `expose:` | `{ audience => wire_name }`, or a list of audiences to use the key. Default: not exposed. |
+| `expose:` | `{ audience => wire_name }`, or a list of audiences to use the key. A Hash value may list several wire names (aliases), each serving the same evaluation: `expose: { mobile: %i[chat_enabled insights_enabled], web: :chat }`. Default: not exposed. |
+| `min_client:` | `{ platform => "version" }`: client builds below it, or of unknown version, are not told about the flag. See [Minimum client versions](#minimum-client-versions). Needs `expose:`. |
 | `unit:` | The unit the flag targets. [Runtime rules](#runtime-rules) match members, cohorts and percentages on this unit's key. |
 | `bucketing:` | On `flag`, `mode` and `experiment`: `{ version: 1 \| 2, salt: "..." }`, for a flag migrated from another system that must keep its old buckets. Needs `unit:`. |
 | `remove_by:`, `final:` | On `flag` (required) and `mode` (optional, together): the date it should be gone, and the value it settles on. A mode's `final:` must be one of its values. |
@@ -1327,7 +1331,11 @@ Only flags with `expose:` for that audience appear, keyed by wire name. Wire
 names are separate from keys, so renaming or removing a flag doesn't break a
 shipped client. Booleans stay booleans; modes and variants are strings. The
 digest hashes the evaluated result, so it changes whenever the answers do,
-which makes it a safe ETag.
+which makes it a safe ETag. Each alias of a flag gets the same value.
+
+This flat payload is for pages the server renders: it ignores `min_client:`
+and tombstones' static wires. Clients with builds of their own (mobile apps,
+devices) use [client delivery](#client-delivery) instead.
 
 With Inertia:
 
@@ -1338,12 +1346,240 @@ class ApplicationController < ActionController::Base
 end
 ```
 
+## Client delivery
+
+Mobile apps, devices and MCP clients learn what is on from the same
+evaluation the server uses, in the shape of OpenFeature's Remote Evaluation
+Protocol (OFREP, validated against its OpenAPI document 0.4.0). One builder,
+`StandardFlags::Delivery`, feeds two outlets: an OFREP endpoint the app
+mounts behind its own authentication, and an embed for responses the client
+already fetches (a bootstrap `/me`, a device check-in, MCP whoami).
+
+### Audiences
+
+`expose:` names audiences. Declare them per app to have the registry check
+every name, and to mark the ones served before sign-in:
+
+```ruby
+StandardFlags.configure do |config|
+  config.audiences = { web: {}, mobile: {}, pre_auth: { public: true, unit: :install } }
+end
+```
+
+Without `config.audiences`, every audience a flag exposes to is a private
+audience, as in 0.2. When it is set, an undeclared `expose:` or `serve:`
+audience fails boot, and building a payload for an undeclared audience raises
+when `config.strict` is on (and is empty otherwise).
+
+### The OFREP endpoint
+
+```ruby
+# config/routes.rb
+post "ofrep/v1/evaluate/flags", to: "flags#ofrep_evaluate_flags"
+post "ofrep/v1/evaluate/flags/:key", to: "flags#ofrep_evaluate_flag"
+
+# app/controllers/flags_controller.rb
+class FlagsController < Api::BaseController   # ActionController::API
+  include StandardFlags::OFREP::Controller
+  standard_flags_ofrep audience: :mobile        # on ::Base, add csrf: (below)
+
+  before_action :authenticate!                 # your own; 401/403 stay yours
+
+  private
+
+  def standard_flags_context = current_account
+end
+```
+
+```http
+POST /ofrep/v1/evaluate/flags
+Authorization: Bearer …
+X-Client-Platform: android
+X-Client-Version: 0.5.0
+Content-Type: application/json
+
+{ "context": { "targetingKey": "ignored", "platform": "android", "appVersion": "0.5.0" } }
+```
+
+```http
+200 OK
+ETag: "4b2eec86…"
+Cache-Control: no-cache, private
+Vary: Authorization, X-Client-Platform, X-Client-Version, X-Client-Build
+
+{ "flags": [
+    { "key": "chat_enabled",     "value": false,     "reason": "KILL_SWITCH", "variant": "off" },
+    { "key": "chat_v1",          "value": false,     "reason": "STATIC",      "variant": "off" },
+    { "key": "homeHero",         "value": "savings", "reason": "SPLIT",       "variant": "savings" },
+    { "key": "insights_enabled", "value": false,     "reason": "KILL_SWITCH", "variant": "off" },
+    { "key": "brokenFlag", "errorCode": "PARSE_ERROR", "errorDetails": "the flag could not be evaluated; use the code default" }
+  ],
+  "metadata": { "version": "4b2eec86…" } }
+```
+
+- **Who it evaluates for.** Units come from `standard_flags_context`, the
+  authenticated caller. The body's `targetingKey` is ignored, so a client
+  can't choose who it is evaluated as. The body may only add client
+  attributes (`platform`, `appVersion` or `app_version`, `build`). They are
+  checked like the X-Client-* headers, and a header wins over the same body
+  attribute. A context that already names a client keeps it. With
+  `config.read_client_headers` off, the request contributes no client at
+  all, from headers or body.
+- **Entries.** One entry per wire name, ordered by it. An entry carries a
+  value, a variant and a reason (STATIC, DEFAULT, TARGETING_MATCH, SPLIT,
+  DISABLED, ENV_PIN or KILL_SWITCH; KILL_SWITCH lets a client say
+  "temporarily unavailable"). A flag whose evaluation failed gets OFREP's
+  error entry instead, and the client uses its code default; the other flags
+  are unaffected. No flag key, rule ID, env var name, unit key or unexposed
+  flag ever appears.
+- **Statuses.** A Content-Type other than `application/json` (any charset)
+  gets 415, and a malformed body gets 400, both as
+  `{"errorCode":"INVALID_CONTEXT","errorDetails":…}`. On the single-flag path, a wire the audience isn't told
+  about (a server-only flag, another audience's wire, a flag the client is
+  too old for) gets 404 `FLAG_NOT_FOUND`, so server-only keys stay invisible.
+  A flag whose evaluation failed gets 400 with its error code. Every status
+  the mixin sends is 2xx, 304 or 4xx: some edges replace 5xx bodies, so a
+  client would never see them.
+- **The request is checked first.** Before Rails' instrumentation (which
+  decodes a JSON body), your filters, authentication and forgery protection
+  run, the mixin checks the media type and reads the body itself. It refuses
+  a declared Content-Length over 64 KiB without reading, reads at most
+  64 KiB otherwise, and checks UTF-8 and JSON. The bytes it read are what
+  Rails parses afterwards, if anything asks for `params`. These 415 and 400
+  answers say nothing about the caller, and come outside the rescue chain,
+  so an app's `rescue_from StandardError` can't turn them into a 5xx. Put
+  your own request-size limit in the web server too: the cap bounds what the
+  mixin reads, not what the server buffers.
+
+#### Forgery protection on `ActionController::Base`
+
+Rails protects `::Base` controllers from cross-site request forgery by
+default, and a bearer-token client sends no CSRF token, so on such a
+controller you must choose:
+
+```ruby
+standard_flags_ofrep audience: :mobile, csrf: :skip     # bearer-token APIs
+standard_flags_ofrep audience: :mobile, csrf: :protect  # cookie sessions; clients send the token
+```
+
+- `csrf: :skip` skips forgery protection for the two OFREP actions only. It
+  is safe because the endpoints accept only `Content-Type:
+  application/json`, which a cross-site form can't send without a CORS
+  preflight, and because the responses aren't readable cross-origin. Use it
+  when requests authenticate with a bearer token or API key.
+- `csrf: :protect` keeps Rails' check: use it when the endpoint
+  authenticates with a session cookie, and have the client send the token
+  (or use the [embed](#embeds) instead).
+
+Leaving `csrf:` out on a controller with forgery protection raises
+`StandardFlags::ConfigurationError` when the class is declared, or on the
+first request if `protect_from_forgery` comes later, instead of answering
+every request 422. `ActionController::API` controllers have no forgery
+protection and need neither.
+
+OFREP's schema lists only STATIC, TARGETING_MATCH, SPLIT, DISABLED and
+UNKNOWN as success reasons. OpenFeature treats reasons as an open set, and the
+gem also sends DEFAULT, ENV_PIN and KILL_SWITCH. OFREP providers pass the
+string through.
+
+### Caching and ETags
+
+The ETag is the SHA-256 of the audience plus the RFC 8785 canonical JSON of
+the entries (sorted keys, no whitespace, strings as raw UTF-8). It depends only on what this client is
+told, never on the config revision, so a client that switches user never gets
+a 304 for answers that differ. Two users told the same thing share an ETag,
+and a 304 is then correct. `If-None-Match` naming it (quoted or bare, weak or
+strong, never `*`) gets 304 with no body. `metadata.version` carries the same
+value, so a client bootstrapped from an embed can send it as If-None-Match.
+A single-flag 200 carries a strong ETag over its one entry and honours
+If-None-Match the same way.
+
+### Embeds
+
+```ruby
+render json: { profile: profile, features: standard_flags_payload(:mobile, format: :ofrep) }
+StandardFlags.payload(:device, for: device, client: { platform: "android", version: "2.1.0" }, format: :ofrep)
+# => { "flags" => [...], "metadata" => { "version" => "…" } }
+```
+
+The embed returns the bulk endpoint's body, built the same way. The flat
+format stays the default, and `payload_digest` still hashes the flat payload.
+
+### Minimum client versions
+
+```ruby
+flag :new_checkout, owner: "payments", remove_by: "2027-06-01", final: true,
+                    expose: { mobile: :checkoutV2 }, min_client: { android: "0.4.0", ios: "0.4.0" }
+```
+
+A client on a listed platform below the minimum is not told about the flag.
+Neither is one whose version is missing or unparseable, nor one that sends
+no platform: an unknown build never receives a `min_client` flag. Platforms
+the declaration doesn't list are unaffected. Platforms come from
+`config.client_platforms`, and precedence is SemVer's (`0.4.0-rc.1` is below
+`0.4.0`).
+
+A kill switch can't declare `min_client:` (the registry refuses it): a
+withheld entry means the client's code default, which for a kill switch is
+"available", so an old build would never see the feature pulled.
+
+### Deprecated wires
+
+When a flag a shipped client reads is removed, keep its wire answering until
+those builds are gone:
+
+```ruby
+tombstone :chat_v1, removed: "2026-12-01", serve: { mobile: { chat_v1: false } },
+                    until: "2027-03-01", until_clients: { android: "0.6.0" }
+```
+
+The wire is served with reason STATIC through `until:` and disappears the
+day after. `until:` is required with `serve:`, and is compared with today's
+date in UTC, so every host switches the wire off at the same moment. With
+`until_clients:`, a client on that platform at or above the version stops
+receiving it sooner. A client of unknown version keeps receiving it until
+`until:`; `until_clients:` never extends it. A static wire can't reuse a
+live wire name. Once `until:` has passed, `flags:stale` lists
+the `serve:` block as removable.
+
+### Before sign-in
+
+```ruby
+class PreAuthFlagsController < ActionController::API
+  include StandardFlags::OFREP::Controller
+  standard_flags_ofrep audience: :pre_auth, anonymous: true
+end
+```
+
+An `anonymous: true` controller serves only a `public: true` audience, and
+never calls `standard_flags_context`. Flags exposed to a public audience may
+target by client attributes, and by the audience's `unit:` (an install ID,
+say), whose key is the body's `targetingKey`. Every other unit resolves to
+nothing. Runtime rules skip segments, since an app's segment resolver may
+read whoever is signed in. The registry refuses a public-audience flag on any
+other unit. Everything else is invisible before sign-in.
+
+Pre-auth answers are public: anyone who sends an install ID reads what that
+install gets, memberships included. Use install IDs the client generates at
+random (a UUID, say), never guessable ones. When a public-audience flag's
+runtime rule has members or cohorts, the gem logs a warning when rules load
+(`public_targeting.standard_flags`) and lists it in the diagnostics.
+
+### Trust model
+
+The server decides. Clients receive only evaluated values for their
+audience, never rules, allowlists, env names or the existence of server-only
+flags. Client attributes (headers or body) only shape what a client is told
+(`min_client:`, rule conditions). They never choose the user, so a forged
+version can at most withhold a flag or show a value meant for another build.
+Never gate authorisation on a client-reported version.
+
 ## Rake tasks
 
 | Task | What it does |
 |------|--------------|
 | `bin/rails flags:list` | Every flag with its value, reason, deciding env var and remove_by (`permanent` for permanent flags). |
-| `bin/rails flags:stale` | Flags and modes past `remove_by`, with the `final:` value to keep. Permanent ones never appear. With runtime rules on, also stale rules and memberships due for purge ([Stale rules](#stale-rules)). |
+| `bin/rails flags:stale` | Flags and modes past `remove_by`, with the `final:` value to keep. Permanent ones never appear. Tombstones whose `serve:` block is past `until:`. With runtime rules on, also stale rules and memberships due for purge ([Stale rules](#stale-rules)). |
 | `bin/rails flags:show KEY=` | One flag's declaration, value here, ENV pin and stored rule; `KEY=cohort:<key>` for a cohort. |
 | `bin/rails flags:set` / `ramp` / `start` / `pause` / `stop` / `members:add` / `members:remove` / `purge` | Break-glass changes through the audited operations ([Rake tasks for break-glass changes](#rake-tasks-for-break-glass-changes)). |
 | `bin/rails flags:restore AT=` | Rules and memberships as they were at `AT`, from the audit log; a dry run unless `APPLY=1` ([Restore](#restore)). |
@@ -1596,7 +1832,12 @@ way the pin goes through the same parser and guard as in production.
 
 ## Conformance suite
 
-`spec/fixtures/conformance/*.json` holds the evaluation contract as data.
+`conformance/` (shipped in the gem) holds the contract as data, with a JSON
+Schema (`conformance/schema/fixture.schema.json`) every fixture validates
+against, and [its own README](conformance/README.md). Each file is tagged
+`scope: "server"` (ENV pins, legacy variables, runtime rules, the write path,
+bucketing) or `"wire"` (what clients run). `conformance/*.json` holds the
+evaluation contract.
 Each file has a registry snippet and cases: environment variables and a
 context in, the expected value, variant, reason, error code and deciding
 variable out. `bucket_vectors.json` pins test vectors for every bucketing
@@ -1623,6 +1864,14 @@ compatibility. That only applies to versions an app passes in a context's
 client Hash, since client headers drop versions that aren't SemVer.
 `versions/legacy_ranges.json` (`"scope": "server"`) pins how RubyGems
 ranges stored by 0.2.x translate and evaluate, against `Gem::Requirement`.
+
+`wire/delivery.json` pins what the server sends: registry, context and
+client in, OFREP entries and ETag out (aliases, `min_client:` with known,
+unknown and older versions, deprecated wires, errored flags, ETag equality
+across users and clients). `wire/client_state.json` pins what a client does
+with a payload: on, off and not loaded, a missing value meaning the code
+default, ceilings, and payloads refused by size or shape. Neither needs Ruby
+to run.
 
 ## Bucketing
 
@@ -1653,9 +1902,10 @@ provider.
 
 Phase 3 is client delivery. On `main` now: client context from request
 headers, portable version ranges, build conditions, `FeatureDisabled` and
-gated MCP tools. Next: an OpenFeature remote-evaluation (OFREP) endpoint and
-an embeddable payload with ETags, minimum client versions and an upgrade
-endpoint, and the manifest contract checked in client CI. Phase 4 adds
+gated MCP tools, an OFREP endpoint mixin and an embeddable payload with
+ETags, minimum client versions and deprecated wires, and the portable
+conformance suite. Next: an upgrade endpoint, compatibility windows, and the
+manifest contract checked in client CI. Phase 4 adds
 experiment exposure tracking and staged rollout plans with automatic
 halts.
 

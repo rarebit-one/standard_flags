@@ -71,7 +71,7 @@ module StandardFlags
         object: []
       }.freeze
 
-      CLIENT_FIELDS = { platform: %w[platform], version: %w[appVersion app_version], build: %w[build] }.freeze
+      CLIENT_FIELDS = Client::CONTEXT_FIELDS
 
       # A context field that can't be a unit key (a Hash, say).
       class InvalidContext < StandardError; end
