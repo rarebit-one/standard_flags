@@ -103,6 +103,16 @@ RSpec.describe StandardFlags::Definition do
       expect { release(sticky: true) }.to raise_error(StandardFlags::DefinitionError, /:sticky/)
     end
 
+    it "refuses the removed legacy_parser: and legacy_true:, naming the canonical pin" do
+      expect { release(env: "ACME_CHECKOUT", legacy_parser: :exact) }.to raise_error(
+        ArgumentError,
+        "flag :new_checkout declares legacy_parser:, removed in 0.4.0. " \
+        "Set the canonical STANDARD_FLAGS_NEW_CHECKOUT instead; the strict parser reads it."
+      )
+      expect { build(:kill_switch, :ai_assistant, owner: "x", env: "ACME_X", "legacy_parser" => "strict", legacy_true: %w[on]) }
+        .to raise_error(ArgumentError, /kill_switch :ai_assistant declares legacy_parser: and legacy_true:, removed in 0\.4\.0\. Set the canonical STANDARD_FLAGS_AI_ASSISTANT/)
+    end
+
     it "rejects a mode default outside its values" do
       expect { build(:mode, preset: :sensor, owner: "x", default: :enforce) }
         .to raise_error(StandardFlags::DefinitionError, /default: :enforce is not one of/)

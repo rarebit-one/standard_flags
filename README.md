@@ -126,8 +126,6 @@ end
 | `default:` | A value, or `{ env_name => value }`. Environments not listed get the kind's default. |
 | `env:` | Legacy environment variable name(s) still honoured. See [Environment variables](#environment-variables). |
 | `inverted:` | The legacy name is a `*_DISABLED` variable: legacy on means flag off. |
-| `legacy_parser:` | `:strict` (default) or `:exact`: how legacy `env:` values are read. See [Exact legacy readers](#exact-legacy-readers). |
-| `legacy_true:` | With `legacy_parser: :exact` on an on/off kind, the exact values that mean on. Default `%w[on]`. |
 | `forbidden_in:` | Environment name(s) where the flag is forced off. A pin that tries to turn it on is reported once per process. |
 | `fail:` | The value returned if evaluation raises. Kill switches default to on. |
 | `expose:` | `{ audience => wire_name }`, or a list of audiences to use the key. A Hash value may list several wire names (aliases), each serving the same evaluation: `expose: { mobile: %i[chat_enabled insights_enabled], web: :chat }`. Default: not exposed. |
@@ -141,10 +139,11 @@ end
 The registry is validated when it loads. `StandardFlags::DefinitionError` is
 raised for a reused tombstoned key, a missing owner, a `flag` without
 `remove_by:`/`final:` (or a `permanent: true` flag or mode with either), a mode with only one of
-`remove_by:`/`final:` or a `final:` outside its values, a `legacy_parser: :exact` without a legacy `env:`
-name, a default outside a mode's values, the same wire name
-used twice for one audience, an undeclared unit, a malformed `bucketing:` or
-unit `key:`, or any unknown attribute.
+`remove_by:`/`final:` or a `final:` outside its values, a default outside a
+mode's values, the same wire name used twice for one audience, an undeclared
+unit, a malformed `bucketing:` or unit `key:`, or any unknown attribute.
+`legacy_parser:` and `legacy_true:` were removed in 0.4.0; declaring either
+raises `ArgumentError` (see [Exact legacy readers](#exact-legacy-readers)).
 
 ### Units
 
@@ -947,16 +946,15 @@ restyle the pages freely.
 Every flag can be pinned with its canonical variable, `STANDARD_FLAGS_<KEY>`
 (the key upcased): `STANDARD_FLAGS_NEW_CHECKOUT=on`.
 
-One strict parser reads every value, trimmed and case-insensitive (a flag
-may opt its legacy names into [exact reading](#exact-legacy-readers)):
+One strict parser reads every value, canonical and legacy, trimmed and
+case-insensitive:
 
 - on/off kinds: `on`/`off`, `true`/`false`, `1`/`0`, `yes`/`no`;
 - modes: a declared value; experiments: a declared variant.
 
 Anything else is ignored and reported once per process per variable, through
 `Rails.error.report(handled: true)` and a `pin_rejected.standard_flags`
-notification. A blank value counts as unset (except under
-[exact reading](#exact-legacy-readers), where a blank legacy on/off value pins off).
+notification. A blank value counts as unset.
 
 ### Legacy names
 
@@ -981,34 +979,15 @@ means enabled. Call that out when migrating a flag.
 
 ### Exact legacy readers
 
-Some legacy readers were exact, `ENV["X"] == "on"`, and code that destroys
-data may rely on that: `X=true` or `X=ON` never turned it on. To keep an
-exact reader's meaning, declare `legacy_parser: :exact`:
+Versions before 0.4.0 offered `legacy_parser: :exact` (and `legacy_true:`)
+to read a legacy name the way a hand-written `ENV["X"] == "on"` reader did.
+Both are gone: declaring either raises `ArgumentError`. Set the canonical
+`STANDARD_FLAGS_<KEY>` variable instead, which the strict parser reads.
 
-```ruby
-flag :purge_inactive, owner: "platform", permanent: true,
-     env: "ACME_PURGE_INACTIVE", legacy_parser: :exact
-flag :bulk_export, owner: "reporting", permanent: true,
-     env: "ACME_BULK_EXPORT", legacy_parser: :exact, legacy_true: %w[on enabled]
-mode :strict_gates, owner: "platform", preset: :sensor,
-     env: "ACME_STRICT_GATES", legacy_parser: :exact
-```
-
-- It applies to legacy `env:` names only. The canonical
-  `STANDARD_FLAGS_<KEY>` pin is always read by the strict parser.
-- On/off kinds: a value in `legacy_true:` (default `%w[on]`) means on; any
-  other non-blank value pins off, as the old reader did, and is never
-  reported as rejected. `inverted: true` still flips the result.
-- Modes and experiments: a value matches only if it equals a declared value
-  exactly (case-sensitive, no trimming); anything else is rejected and
-  reported like any unparseable pin.
-- Matching does no trimming or case folding.
-- A legacy variable that is set but blank (`X=""`, `X=" "`) pins an on/off
-  flag off, as `ENV["X"] == "on"` did, so blanking the variable disarms the
-  flag even when a runtime rule or default would serve on. Only an unset
-  variable falls through. Two exceptions keep blank as unset: an `inverted:`
-  name (pinning it would turn the flag on) and modes and experiments, where
-  no value is "off". The canonical pin always treats blank as unset.
+Moving off an exact reader widens what turns the flag on (`true`, `ON`,
+` on ` now all mean on) and makes a set-but-blank value unset rather than
+off, so it falls through to a runtime rule or the default. For a flag that
+guards destructive work, check every environment's value before upgrading.
 
 ## Sensor rollouts
 

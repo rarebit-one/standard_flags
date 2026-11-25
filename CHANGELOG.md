@@ -179,6 +179,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `audiences` (`{ audience => [wires] }`). `standard_flags:manifest:check`
   reads a version 1 file, reports it stale, and still checks its wires.
 
+### Removed
+
+- **Breaking: `legacy_parser:` and `legacy_true:`.** The exact legacy
+  reader (`legacy_parser: :exact`, which read a legacy `env:` name the way
+  `ENV["X"] == "on"` did) is gone. Declaring either option now raises
+  `ArgumentError` naming the replacement: set the canonical
+  `STANDARD_FLAGS_<KEY>` variable, which the strict parser reads. Legacy
+  `env:` names and `inverted:` are still supported, and are always read
+  strictly, so `true`/`ON` now turn such a flag on and a set-but-blank value
+  is unset instead of off. The `legacy_exact.json` conformance fixture and
+  the schema's `legacy_parser`/`legacy_true` properties are removed.
+
 ## [0.3.0] - 2026-11-25
 
 ### Added
