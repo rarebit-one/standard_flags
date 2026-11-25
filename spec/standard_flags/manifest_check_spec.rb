@@ -304,6 +304,13 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
     expect(result.warnings).to eq([ "tombstone :chat_v1 now serves mobile.chat_v1 through 2027-02-01, earlier than the 2027-03-01 shipped clients were promised" ])
   end
 
+  it "normalises a long run of newlines in linear time" do
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    expect(check(committed: "#{shipped}#{"\r\n" * 200_000}").call.status).to eq(:ok)
+    expect(check(committed: "#{shipped}#{"\n" * 400_000}").call.status).to eq(:ok)
+    expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
+  end
+
   it "ignores CRLF line endings and trailing newlines, but not other formatting" do
     expect(check(committed: shipped.gsub("\n", "\r\n")).call.status).to eq(:ok)
     expect(check(committed: "#{shipped}\n\n").call.status).to eq(:ok)

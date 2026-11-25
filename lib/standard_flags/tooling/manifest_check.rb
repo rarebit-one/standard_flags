@@ -239,8 +239,13 @@ module StandardFlags
         @committed != @current
       end
 
+      # A byte scan rather than a `\n*\z` regex, which is polynomial on a
+      # long run of newlines.
       def normalize(text)
-        text.b.gsub("\r\n", "\n").sub(/\n*\z/, "\n")
+        text = text.b.gsub("\r\n", "\n")
+        last = text.bytesize
+        last -= 1 while last.positive? && text.getbyte(last - 1) == 10
+        "#{text.byteslice(0, last)}\n"
       end
 
       # Removed wires, type changes and audiences made private, from `base`
