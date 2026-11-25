@@ -7,6 +7,6 @@ ignore_actions:
   - name: \./.*
     ref: .*
   # Deliberately SHA-pinned to a main-branch commit; exempt from the
-  # semver-comment check only (still SHA-pinned). See rarebit-ops#119.
+  # semver-comment check only (still SHA-pinned).
   - name: anthropics/claude-code-action
     ref: .*
