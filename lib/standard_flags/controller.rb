@@ -43,7 +43,8 @@ module StandardFlags
   # through the same responders, always with a JSON body; a raised
   # StandardFlags::ClientUpgradeRequired is answered the same way, and as
   # robustly. It reads `standard_flags_upgrade_client`, as the status
-  # endpoint does, so the two never disagree about one request.
+  # endpoint does, and that is the same client the flag guards use, so
+  # none of them disagree about one request.
   #
   # Flags are evaluated for `standard_flags_context` plus the calling client,
   # read once per request from the X-Client-Platform, X-Client-Version and
@@ -112,15 +113,29 @@ module StandardFlags
       # `store_url`. A client in its grace window, or below `recommended`
       # only, passes. So does one whose platform or version is unknown,
       # unless `config.require_client_version` is true. `group:` picks the
-      # client group (see StandardFlags::ClientApp). One declaration per
-      # controller (a later one replaces its group and responder); a
-      # subclass can turn it off with `skip_client_version_check`.
-      def requires_client_version(only: nil, except: nil, group: nil, with: nil)
+      # client group (see StandardFlags::ClientApp).
+      #
+      # One guard per controller hierarchy: declaring it again, in the same
+      # class or under a class that inherits one, raises
+      # StandardFlags::ConfigurationError, because the new declaration
+      # would silently replace the earlier one (its actions, group and
+      # responder). Pass `override: true` to replace it on purpose; to
+      # narrow an inherited guard, use `skip_client_version_check`.
+      def requires_client_version(only: nil, except: nil, group: nil, with: nil, override: false)
         unless with.nil? || with.is_a?(Symbol) || with.respond_to?(:call)
           raise ArgumentError, "with: must respond to call(controller, denial) or be a Symbol naming a controller method"
         end
+        raise ArgumentError, "override: must be true or false" unless [ true, false ].include?(override)
 
-        self.standard_flags_client_version_options = { group: group&.to_sym, responder: with }.freeze
+        existing = standard_flags_client_version_options
+        if existing && !override
+          where = existing[:owner].equal?(self) ? "already declared here" : "inherited from #{existing[:owner].name || 'a parent'}"
+          raise ConfigurationError,
+            "#{name || 'this controller'} declares requires_client_version again (#{where}); a second declaration would " \
+            "replace the first. Pass override: true to replace it, or use skip_client_version_check to narrow it"
+        end
+
+        self.standard_flags_client_version_options = { group: group&.to_sym, responder: with, owner: self }.freeze
         before_action :standard_flags_check_client_version, **{ only: only, except: except }.compact
       end
 
@@ -210,16 +225,12 @@ module StandardFlags
     end
 
     # The client the upgrade checks read (the 426 guard and the status
-    # endpoint): the X-Client-* headers, with any field they don't carry
-    # taken from the client `standard_flags_context` names. Headers win, as
-    # on the OFREP endpoint.
+    # endpoint), with the precedence the flag guards use: the client
+    # `standard_flags_context` names, whole, when it names one (the app
+    # chose it, from a trusted device record, say), else the X-Client-*
+    # headers' client, whole. Fields are never mixed from the two.
     def standard_flags_upgrade_client
-      headers = standard_flags_client
-      context = Context.wrap(standard_flags_context).client
-      return headers if context.empty?
-      return context if headers.empty?
-
-      Client.new(**context.to_h.merge(headers.to_h))
+      standard_flags_request_context.client
     end
 
     def standard_flags_check_client_version

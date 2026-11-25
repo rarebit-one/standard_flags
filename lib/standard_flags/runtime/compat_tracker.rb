@@ -1,5 +1,3 @@
-require "set"
-
 module StandardFlags
   module Runtime
     # One row of standard_flags_compat_stats: how often a compat flag was
@@ -9,9 +7,9 @@ module StandardFlags
     # recognise, or "none" when the evaluation carried no client.
     #
     # The row whose platform is "*" (CompatTracker::TRACKING) is the flag's
-    # tracking marker: written, with no hits, by the first successful write
-    # after tracking starts, so its `first_seen_at` says since when the
-    # counts can be trusted.
+    # tracking marker, written with no hits by every successful write: its
+    # `first_seen_at` says since when the counts can be trusted, and its
+    # `last_hit_at` (read as `last_flushed_at`) when a write last succeeded.
     CompatStat = Data.define(:key, :platform, :hits, :oldest_version, :last_hit_at, :first_seen_at) do
       def initialize(key:, platform:, hits:, oldest_version:, last_hit_at:, first_seen_at: nil)
         super
@@ -19,6 +17,11 @@ module StandardFlags
 
       def marker?
         platform == CompatTracker::TRACKING
+      end
+
+      # When a write last succeeded, for a tracking marker; nil otherwise.
+      def last_flushed_at
+        last_hit_at if marker?
       end
 
       def to_h
@@ -69,8 +72,10 @@ module StandardFlags
     # the client's version to an in-memory table, and nothing is written
     # during the evaluation. When a unit of work ends, at most once per
     # `config.evaluation_tracking_interval` per process (failed writes
-    # included), the counts are added to standard_flags_compat_stats, with
-    # a tracking marker per compat flag on the first write that succeeds.
+    # included), the counts are added to standard_flags_compat_stats with a
+    # tracking marker per compat window, refreshed by every write that
+    # succeeds (one write per interval even without hits, so a quiet
+    # window still shows tracking is healthy).
     # It is best-effort: a failed write is reported once per process, emits
     # `compat_tracking_failed` once per interval, and the counts are kept
     # for the next try (the table holds one entry per flag and platform, so
@@ -94,6 +99,9 @@ module StandardFlags
       # How long a flag must go unused (and tracking must have run) before
       # flags:stale calls its window removable.
       IDLE = 14 * 86_400
+      # How recent the last successful write must be for flags:stale to
+      # trust that missing hits mean no use.
+      HEALTHY = 2 * 86_400
 
       Pending = Struct.new(:hits, :oldest, :last_hit_at)
 
@@ -144,18 +152,17 @@ module StandardFlags
         config = StandardFlags.config
         return unless config.track_compat
 
-        unmarked = registry.definitions.select(&:compat_window?).map(&:key)
-        batch, markers = @mutex.synchronize do
+        batch = @mutex.synchronize do
           forked!
-          markers = unmarked.reject { |key| @marked.include?(key) }
-          next if (@counts.empty? && markers.empty?) || (@flushed_at && now - @flushed_at < config.evaluation_tracking_interval.to_f)
+          next if @flushed_at && now - @flushed_at < config.evaluation_tracking_interval.to_f
 
           @flushed_at = now
-          [ @counts.tap { @counts = {} }, markers ]
+          @counts.tap { @counts = {} }
         end
         return unless batch
 
-        write(store, batch, markers)
+        windows = registry.definitions.select(&:compat_window?).map(&:key)
+        write(store, batch, windows) unless batch.empty? && windows.empty?
       end
 
       # Counts not yet written, as CompatStats.
@@ -170,7 +177,6 @@ module StandardFlags
 
       def reset
         @counts = {}
-        @marked = Set.new
         @flushed_at = nil
         @pid = Process.pid
       end
@@ -180,18 +186,16 @@ module StandardFlags
         reset unless @pid == Process.pid
       end
 
-      def write(store, batch, markers)
-        rows = stats(batch) + markers.map { |key| CompatStat.new(key: key, platform: TRACKING, hits: 0, oldest_version: nil, last_hit_at: nil) }
+      def write(store, batch, windows)
+        flushed_at = Time.now.utc
+        markers = windows.map { |key| CompatStat.new(key: key, platform: TRACKING, hits: 0, oldest_version: nil, last_hit_at: flushed_at) }
         written = begin
-          store.record_compat(rows)
+          store.record_compat(stats(batch) + markers)
         rescue StandardError => e
           failed(e)
-          restore(batch, keep_clock: true)
-          return
+          return restore(batch, keep_clock: true)
         end
-        return restore(batch, keep_clock: false) if written.nil?
-
-        @mutex.synchronize { @marked.merge(markers) }
+        restore(batch, keep_clock: false) if written.nil?
       end
 
       def stats(counts)

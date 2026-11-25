@@ -30,7 +30,7 @@ module StandardFlags
       # Whether `table` exists in the app's database; false when there is no
       # connection to ask.
       def self.table_present?(table)
-        ActiveRecord::Base.connection.data_source_exists?(table)
+        ActiveRecord::Base.with_connection { |connection| connection.data_source_exists?(table) }
       rescue StandardError
         false
       end

@@ -308,8 +308,8 @@ class UpgradeKioskController < DummyBaseController
   end
 end
 
-# The app's context names a client; headers win field by field, for the
-# guard and the status endpoint alike.
+# The app's context names a client, which is used whole (headers ignored)
+# by the guard, the status endpoint and the flag guards alike.
 module DummyContextClient
   private
 
@@ -333,6 +333,11 @@ class ContextClientStatusController < DummyBaseController
   include StandardFlags::ClientStatus::Controller
 
   standard_flags_client_status
+
+  # What the upgrade checks and the flag guards each read.
+  def clients
+    render json: { upgrade: standard_flags_upgrade_client.to_h, flags: standard_flags_request_context.client.to_h }
+  end
 end
 
 # A subclass turning an inherited guard off for one action.

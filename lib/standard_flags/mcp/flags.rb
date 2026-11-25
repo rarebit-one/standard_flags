@@ -98,7 +98,7 @@ module StandardFlags
         report = Diagnostics.compat(registry)
         entry = report[:flags].find { |flag| flag[:flag] == definition.key }
         { compat: { until_clients: entry[:until_clients], tracking: report[:tracking], error: report[:error],
-                    tracking_since: entry[:tracking_since], stats: entry[:stats] } }
+                    tracking_since: entry[:tracking_since], last_flushed_at: entry[:last_flushed_at], stats: entry[:stats] } }
       end
 
       # The evaluation, and the unit key it was for, masked.

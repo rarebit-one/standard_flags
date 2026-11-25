@@ -58,7 +58,8 @@ module StandardFlags
       { tracking: tracking, error: error, flags: windows.map do |definition|
         markers, rows = grouped.fetch(definition.key.to_s, []).partition(&:marker?)
         { flag: definition.key, until_clients: definition.until_clients.transform_values(&:to_s),
-          tracking_since: markers.first&.first_seen_at&.utc&.iso8601, stats: stats && rows.map(&:to_h) }
+          tracking_since: markers.first&.first_seen_at&.utc&.iso8601,
+          last_flushed_at: markers.first&.last_flushed_at&.utc&.iso8601, stats: stats && rows.map(&:to_h) }
       end }
     end
 

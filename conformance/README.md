@@ -188,7 +188,7 @@ The rules:
 `upgrade/client_status_server.json` (`"scope": "server"`) has the same shape
 and adds what only a server has: `env_vars` (the
 `STANDARD_FLAGS_CLIENT_<NAME>_*` break-glass pins, which beat the code and
-any store lookup; a raised `_MIN_VERSION` needs `_SINCE`) and
+any store lookup; a raised `_MIN_VERSION` needs `_SINCE`, and a pin is a raise unless every version meeting the code's minimum also meets it) and
 `store_lookup` (client name => the version that client's lookup last
 answered; null means no answer, so `available` applies; a lookup caps only
 its own client). Clients skip it.

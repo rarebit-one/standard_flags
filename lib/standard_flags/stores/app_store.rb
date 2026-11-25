@@ -20,11 +20,14 @@ module StandardFlags
     # A good answer is kept for `ttl:` seconds (an hour). After a failure
     # the last good answer stands and the next try waits `retry_after:`
     # seconds (5 minutes), doubling with each further failure up to `ttl:`,
-    # so an unreachable store is asked rarely. Each fetch has an overall
-    # `deadline:` (5 seconds) covering connect, TLS, request and body, and
-    # a body cap of 256 KiB read in chunks. Failures emit
-    # `store_lookup_failed.standard_flags` (`store`, `client`, `reason`);
-    # nothing raises.
+    # so an unreachable store is asked rarely; a runner that can't start
+    # the refresh backs off the same way. Each fetch has an overall
+    # `deadline:` (5 seconds) covering connect, TLS, request and body, with
+    # each phase's own timeout a little shorter so net/http closes its
+    # socket itself, and a body cap of 256 KiB read in chunks. The
+    # connection is closed on every path. Failures emit
+    # `store_lookup_failed.standard_flags` (`store`, `client`, `reason`)
+    # after the fetch has ended, never inside its deadline; nothing raises.
     #
     # A store version that isn't SemVer or a shorthand (`2.1.0.4`) reads as
     # unknown, so `available:` applies.
@@ -61,9 +64,10 @@ module StandardFlags
       end
 
       # Fetches now, on this thread (a warm-up at boot, say), and answers
-      # the version known afterwards.
+      # the version known afterwards. A background refresh may run beside
+      # it; the later answer wins.
       def refresh!(client_app = nil)
-        refresh(client_app)
+        refresh(client_app, claimed: false)
         @version
       end
 
@@ -89,11 +93,14 @@ module StandardFlags
 
         @runner.call { refresh(client_app) }
       rescue StandardError => e
-        @mutex.synchronize { @refreshing = nil }
+        @mutex.synchronize do
+          @refreshing = nil
+          back_off
+        end
         failed(client_app, e.class.name)
       end
 
-      def refresh(client_app)
+      def refresh(client_app, claimed: true)
         version = fetch(client_app)
         @mutex.synchronize do
           if version
@@ -101,45 +108,63 @@ module StandardFlags
             @failures = 0
             @next_at = @clock.call + @ttl
           else
-            @failures += 1
-            @next_at = @clock.call + [ @retry_after * (2**(@failures - 1)), @ttl ].min
+            back_off
           end
         end
       ensure
-        @mutex.synchronize { @refreshing = nil }
+        @mutex.synchronize { @refreshing = nil } if claimed
       end
 
-      def fetch(client_app)
-        body = Timeout.timeout(@deadline) { download(client_app) }
-        return nil if body.nil?
+      # Called under the lock.
+      def back_off
+        @failures += 1
+        @next_at = @clock.call + [ @retry_after * (2**(@failures - 1)), @ttl ].min
+      end
 
-        result = JSON.parse(body)
+      # The version, or nil after reporting why. Reporting runs outside the
+      # deadline, so a slow subscriber can't be interrupted by it.
+      def fetch(client_app)
+        outcome = begin
+          Timeout.timeout(@deadline) { download }
+        rescue Timeout::Error => e
+          [ :failed, e.class.name ]
+        end
+        return failed(client_app, outcome.last) if outcome.first == :failed
+
+        result = JSON.parse(outcome.last)
         first = result.is_a?(Hash) && result["results"].is_a?(Array) && result["results"].first
         Version.parse(first.is_a?(Hash) ? first["version"] : nil) || failed(client_app, "no usable version")
       rescue StandardError => e
         failed(client_app, e.class.name)
       end
 
-      # The body, or nil (after reporting) when the response can't be used.
-      def download(client_app)
+      # `[:ok, body]` or `[:failed, reason]`. Reports nothing (it runs inside
+      # the deadline). Net::HTTP.start's block form finishes the connection
+      # on every way out; the phase timeouts sit below the deadline so a
+      # stalled connect fails inside net/http, which closes its socket.
+      def download
         target = uri
-        Net::HTTP.start(target.host, target.port, use_ssl: true, open_timeout: @deadline, read_timeout: @deadline,
-                                                  write_timeout: @deadline, ssl_timeout: @deadline) do |http|
+        phase = @deadline * 0.8
+        Net::HTTP.start(target.host, target.port, use_ssl: true, open_timeout: phase, read_timeout: phase,
+                                                  write_timeout: phase, ssl_timeout: phase) do |http|
           http.request(Net::HTTP::Get.new(target)) do |response|
-            return failed(client_app, "HTTP #{response.code}") unless response.is_a?(Net::HTTPSuccess)
+            return [ :failed, "HTTP #{response.code}" ] unless response.is_a?(Net::HTTPSuccess)
 
             body = +""
             response.read_body do |chunk|
               body << chunk
-              return failed(client_app, "response too large") if body.bytesize > MAX_BYTES
+              return [ :failed, "response too large" ] if body.bytesize > MAX_BYTES
             end
-            return body
+            return [ :ok, body ]
           end
         end
+        [ :failed, "no response" ]
+      rescue StandardError => e
+        [ :failed, e.class.name ]
       end
 
       def failed(client_app, reason)
-        Reporting.instrument(:store_lookup_failed, store: "app_store", client: client_app&.name, reason: reason)
+        Reporting.instrument(:store_lookup_failed, store: self.class.name, client: client_app&.name, reason: reason)
         nil
       end
     end

@@ -5,11 +5,11 @@ module StandardFlags
   module ClientStatus
     # `GET /client/status` as a controller mixin. It runs before
     # authentication and says nothing about the caller. It reads the client
-    # exactly as `requires_client_version` does
-    # (`standard_flags_upgrade_client`: the X-Client-* headers, with any
-    # field they lack taken from a client `standard_flags_context` names),
-    # so a build the guard refuses is always told why here. Keep that
-    # context safe to call before sign-in (nil, the default, is).
+    # exactly as `requires_client_version` and the flag guards do
+    # (`standard_flags_upgrade_client`: the client `standard_flags_context`
+    # names, whole, else the X-Client-* headers' client), so a build the
+    # guard refuses is always told why here. Keep that context safe to call
+    # before sign-in (nil, the default, is).
     #
     #   # config/routes.rb
     #   get "client/status", to: "client_status#client_status"

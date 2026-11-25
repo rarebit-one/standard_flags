@@ -86,6 +86,15 @@ RSpec.describe "compat stats on Postgres", :db, registry: RuntimeHelpers::COMPAT
     ActiveSupport::Notifications.unsubscribe(subscriber)
   end
 
+  it "moves a tracking marker's last flush forward and keeps its first_seen_at" do
+    marker = ->(flushed) { StandardFlags::Runtime::CompatStat.new(key: :legacy_auth, platform: "*", hits: 0, oldest_version: nil, last_hit_at: flushed) }
+    store.record_compat([ marker.call(at) ])
+    first = models::CompatStat.pick(:first_seen_at)
+    store.record_compat([ marker.call(at + 3600) ])
+    store.record_compat([ marker.call(at + 60) ])
+    expect(store.compat_stats.first).to have_attributes(marker?: true, hits: 0, last_flushed_at: at + 3600, first_seen_at: first)
+  end
+
   it "keeps first_seen_at, and lets the oldest version start over after 14 idle days" do
     store.record_compat([ stat("android", 1, "0.0.0", at) ])
     first = models::CompatStat.pick(:first_seen_at)

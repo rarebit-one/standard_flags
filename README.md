@@ -1532,7 +1532,10 @@ Neither is one whose version is missing or unparseable, nor one that sends
 no platform: an unknown build never receives a `min_client` flag. Platforms
 the declaration doesn't list are unaffected. Platforms come from
 `config.client_platforms`, and precedence is SemVer's (`0.4.0-rc.1` is below
-`0.4.0`).
+`0.4.0`). That is stricter than the [client registry](#client-upgrades)'s
+minimum, where a prerelease of exactly the minimum release meets it: a
+`0.4.0-beta` build passes a client minimum of `0.4.0` but not
+`min_client: { android: "0.4.0" }`.
 
 A kill switch can't declare `min_client:` (the registry refuses it): a
 withheld entry means the client's code default, which for a kill switch is
@@ -1633,7 +1636,11 @@ flag's pin beats its default (for `:android_app`,
 `STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION`). Lower a minimum that went
 out too high with `_MIN_VERSION` alone. To raise one, pin `_SINCE` with it:
 a raised `_MIN_VERSION` without `_SINCE` is ignored, so a break-glass raise
-always gets its own grace window. A value that doesn't parse is ignored too.
+always gets its own grace window. A pin lowers the minimum only when every
+version that meets the code's minimum also meets the pin, so a prerelease of
+the code's minimum (`0.4.0-rc.1` against `0.4.0`) is a raise: it stops
+`0.4.0-beta.1`, which `0.4.0` lets through. A value that doesn't parse is
+ignored too.
 Pins in force are listed in the diagnostics (`clients:`), as flags' pins
 are, and never warn; ignored pins are health check warnings, by name only.
 
@@ -1657,11 +1664,15 @@ it is asked on request threads, so it must never wait on the network.
 public iTunes lookup API in the background: the first call answers nil (so
 `available:` applies) and starts a refresh on a thread, and later calls
 answer the last good version. It refreshes at most once an hour per process.
-After a failure it keeps the last good answer and waits 5 minutes, doubling
-with each further failure up to an hour. Each fetch has one overall 5-second
-deadline (connect, TLS, request and body) and a 256 KiB body cap.
-`refresh!` fetches on the calling thread, for a warm-up at boot. Failures
-emit `store_lookup_failed.standard_flags`; nothing raises. Google Play has
+After a failure, or when its runner can't start the refresh, it keeps the
+last good answer and waits 5 minutes, doubling with each further failure up
+to an hour. Each fetch has one overall 5-second deadline (connect, TLS,
+request and body), with each phase's own timeout a little shorter so a
+stalled connection is closed by net/http, and a 256 KiB body cap; the
+connection is closed on every path. `refresh!` fetches on the calling
+thread, for a warm-up at boot. Failures emit
+`store_lookup_failed.standard_flags` (`store`, `client`, `reason`) once the
+fetch has ended; nothing raises. Google Play has
 no public API for this (it needs a service account), so Android clients use
 `available:` alone: set it when a release reaches production. A store
 version that isn't SemVer (`2.1.0.4`) reads as unknown.
@@ -1680,11 +1691,13 @@ end
 
 Route it outside authentication; it reveals nothing about the caller. It is
 a GET, so forgery protection never applies. It reads the client exactly as
-the [426 guard](#answering-426) does (`standard_flags_upgrade_client`): the
-X-Client-* headers, with any field they don't carry taken from a client your
-`standard_flags_context` names (headers win). So a build the guard refuses is
-always told why here. Keep that context safe to call before sign-in (nil,
-the default, is). It answers 200 with:
+the [426 guard](#answering-426) and the flag guards do
+(`standard_flags_upgrade_client`): the client your `standard_flags_context`
+names, whole, when it names one (the app chose it, from a trusted device
+record, say), else the X-Client-* headers' client, whole. Fields from the
+two are never mixed. So a build the guard refuses is always told why here.
+Keep that context safe to call before sign-in (nil, the default, is). It
+answers 200 with:
 
 ```json
 { "status": "upgrade_recommended", "platform": "android", "version": "0.3.9",
@@ -1741,9 +1754,15 @@ is the client's name, `error` is `:client_upgrade_required`, `status` 426,
 so one responder can tell it from a feature denial by `error`. A build in
 its grace window, or below `recommended` only, passes. So does one whose
 platform or version is unknown, unless `config.require_client_version =
-true`. The guard reads the same client as the status endpoint. Declare it
-once per controller; a subclass turns it off with
-`skip_client_version_check`. Client-facing denials stay 4xx (403 and 426):
+true`. The guard reads the same client as the status endpoint and the flag
+guards.
+
+There is one guard per controller hierarchy. Declaring it again, in the same
+class or in a subclass of a guarded class, raises
+`StandardFlags::ConfigurationError`, because the new declaration would
+silently replace the earlier one (its actions, group and responder). Pass
+`override: true` to replace it on purpose. To narrow an inherited guard, use
+`skip_client_version_check only:/except:` in the subclass. Client-facing denials stay 4xx (403 and 426):
 some edges replace an app's 5xx body with their own page. HTTP defines 426
 for protocol upgrades and expects an `Upgrade` header; here it means "upgrade
 the app", with no `Upgrade` header.
@@ -1777,21 +1796,25 @@ never during an evaluation, and at most once per
 failed writes included. A failed write is reported once per process, emits
 `compat_tracking_failed.standard_flags` once per interval, and keeps the
 counts for the next try. A write skipped inside a transaction is tried again
-at the next unit of work. The first write that succeeds also records each
-window's tracking marker, which says since when the counts can be trusted.
+at the next unit of work. Every write that succeeds also refreshes each
+window's tracking marker: when tracking began, and when a write last
+succeeded. A tracking process writes once per interval even without hits,
+so a quiet window still shows tracking is healthy.
 A forked child starts with no pending counts. Operator reads (MCP tools,
 diagnostics) don't count. Every evaluation counts, so a shim checked on
 every request (or in a `StandardFlags.snapshot`) never looks idle; evaluate
 it only on the legacy path.
 
 `flags:stale` says a window "can be removed" only when tracking has run for
-at least 14 days, no hit has landed in the last 14 days, and the window has
-passed on every listed platform. A platform's window has passed when every
+at least 14 days, a write has succeeded in the last 2 days, no hit has
+landed in the last 14 days, and the window has passed on every listed
+platform. While writes are failing it says "tracking unhealthy since"
+the last successful write, since missing hits then prove nothing. A platform's window has passed when every
 client declared for it enforces a minimum at or above the listed version
 today (UTC), or when no build below it has used the flag (no hits from that
 platform, or its oldest version seen is at or above it). Until tracking is
 14 days old it says "not enough data" with the date tracking began. The
-diagnostics (`compat:`, with `tracking_since`) and the MCP `get_flag` tool
+diagnostics (`compat:`, with `tracking_since` and `last_flushed_at`) and the MCP `get_flag` tool
 show the window and the stored counts.
 
 ## Rake tasks

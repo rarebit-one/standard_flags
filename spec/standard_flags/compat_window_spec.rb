@@ -119,14 +119,21 @@ RSpec.describe StandardFlags::Runtime::CompatTracker, registry: RuntimeHelpers::
       expect([ counts.first.hits, counts.first.oldest_version ]).to eq([ 61, "0.1.2" ])
     end
 
-    it "writes each window's tracking marker once, even before any hit" do
+    it "refreshes each window's tracking marker on every successful write, once per interval, even without hits" do
       unit_of_work { StandardFlags.evaluate(:new_checkout) }
-      markers = store.compat_stats.select(&:marker?)
-      expect(markers.map { |row| [ row.key, row.platform, row.hits ] }).to eq([ [ "legacy_auth", "*", 0 ] ])
-      expect(markers.first.first_seen_at).to be_within(5).of(Time.now.utc)
-      time[0] += 120
+      marker = store.compat_stats.find(&:marker?)
+      expect([ marker.key, marker.platform, marker.hits ]).to eq([ "legacy_auth", "*", 0 ])
+      expect([ marker.first_seen_at, marker.last_flushed_at ]).to all(be_within(5).of(Time.now.utc))
+      time[0] += 30
       unit_of_work { StandardFlags.evaluate(:new_checkout) }
       expect(store.reads[:record_compat]).to eq(1)
+      later = Time.now.utc + 3600
+      allow(Time).to receive(:now).and_return(later)
+      time[0] += 60
+      unit_of_work { StandardFlags.evaluate(:new_checkout) }
+      refreshed = store.compat_stats.find(&:marker?)
+      expect(store.reads[:record_compat]).to eq(2)
+      expect([ refreshed.first_seen_at, refreshed.last_flushed_at ]).to eq([ marker.first_seen_at, later ])
     end
 
     it "reads the stored stats back by flag key" do
@@ -234,6 +241,7 @@ RSpec.describe StandardFlags::Runtime::CompatTracker, registry: RuntimeHelpers::
       report = StandardFlags::Diagnostics.report
       expect(report[:compat]).to match(tracking: true, error: nil, flags: [
         { flag: :legacy_auth, until_clients: { "android" => "0.1.12", "ios" => "2.0.0" }, tracking_since: a_string_matching(/\A\d{4}-/),
+          last_flushed_at: a_string_matching(/\A\d{4}-/),
           stats: [ a_hash_including(key: "legacy_auth", platform: "android", hits: 1, oldest_version: "0.1.4") ] }
       ])
       expect(StandardFlags::Diagnostics.warnings(report)).to eq([])
@@ -243,7 +251,8 @@ RSpec.describe StandardFlags::Runtime::CompatTracker, registry: RuntimeHelpers::
       StandardFlags.config.track_compat = true
       report = StandardFlags::Diagnostics.report
       expect(report[:compat]).to eq(tracking: false, error: nil, flags: [
-        { flag: :legacy_auth, until_clients: { "android" => "0.1.12", "ios" => "2.0.0" }, tracking_since: nil, stats: nil }
+        { flag: :legacy_auth, until_clients: { "android" => "0.1.12", "ios" => "2.0.0" }, tracking_since: nil, last_flushed_at: nil,
+          stats: nil }
       ])
       expect(StandardFlags::Diagnostics.warnings(report)).to eq([ "config.track_compat is on but runtime rules are off, so compat hits are not counted" ])
       expect(report[:status]).to eq(:warn)
@@ -267,6 +276,7 @@ RSpec.describe StandardFlags::Runtime::CompatTracker, registry: RuntimeHelpers::
       result = tool.call({ "key" => "legacy_auth" }, actor: StandardFlags::Actor.system("spec"))
       expect(result["compat"]).to match("until_clients" => { "android" => "0.1.12", "ios" => "2.0.0" }, "tracking" => true, "error" => nil,
                                         "tracking_since" => a_string_matching(/\A\d{4}-/),
+                                        "last_flushed_at" => a_string_matching(/\A\d{4}-/),
                                         "stats" => [ a_hash_including("platform" => "ios", "hits" => 1, "oldest_version" => "1.9.0") ])
       expect(tool.call({ "key" => "old_export" }, actor: StandardFlags::Actor.system("spec"))).not_to have_key("compat")
     end
@@ -284,12 +294,44 @@ RSpec.describe StandardFlags::Runtime::CompatTracker, registry: RuntimeHelpers::
     end
 
     # Tracking began `days` ago.
-    def tracked_for(days, target = store)
+    # Tracking began `days` ago, and a write last succeeded `flushed` days ago.
+    def tracked_for(days, target = store, flushed: 0)
       target.record_compat([ StandardFlags::Runtime::CompatStat.new(key: :legacy_auth, platform: "*", hits: 0, oldest_version: nil,
-                                                                    last_hit_at: nil, first_seen_at: now - (days * 86_400)) ])
+                                                                    last_hit_at: now - (flushed * 86_400),
+                                                                    first_seen_at: now - (days * 86_400)) ])
     end
 
     before { track! }
+
+    it "says tracking is unhealthy, not removable, when no write has succeeded for 2 days" do
+      tracked_for(30, flushed: 3)
+      expect(stale).to include("compat legacy_auth: tracking unhealthy since 2026-12-17 (no successful write since); " \
+                               "not enough data to judge its window")
+      expect(stale).not_to include("can be removed")
+    end
+
+    it "trusts a write within 2 days" do
+      tracked_for(30, flushed: 2)
+      expect(stale).to include("can be removed")
+    end
+
+    it "never advises removal while writes fail after the marker was first written" do
+      StandardFlags::Runtime.clock = -> { time.first }
+      StandardFlags.config.evaluation_tracking_interval = 3600
+      first = now - (25 * 86_400)
+      allow(Time).to receive(:now).and_return(first)
+      unit_of_work { StandardFlags.evaluate(:new_checkout) }
+      allow(store).to receive(:record_compat).and_raise(StandardFlags::Runtime::StoreError.new("x", cause_class: "PG::InsufficientPrivilege"))
+      20.times do |day|
+        allow(Time).to receive(:now).and_return(first + ((day + 1) * 86_400))
+        time[0] += 86_400
+        unit_of_work { evaluate_as("android", "0.1.0") }
+      end
+      allow(store).to receive(:compat_stats).and_call_original
+      expect(stale).to include("compat legacy_auth: tracking unhealthy since 2026-11-25")
+      expect(stale).not_to include("can be removed")
+    end
+
 
     def android_clients(android_since)
       proc do

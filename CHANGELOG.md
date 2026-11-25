@@ -21,7 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ENV break-glass pins `STANDARD_FLAGS_CLIENT_<NAME>_MIN_VERSION`, `_SINCE`,
   `_RECOMMENDED` and `_AVAILABLE` beat the code and any store lookup. A
   raised `_MIN_VERSION` without `_SINCE` is ignored, so a break-glass raise
-  gets its own grace window; a lowered one needs no `_SINCE`. Pins in force
+  gets its own grace window; a lowered one needs no `_SINCE`. A pin lowers
+  the minimum only when every version meeting the code's minimum also meets
+  it, so a prerelease of the code's minimum is a raise. Pins in force
   are listed in `Diagnostics.report[:clients]` (never health warnings);
   ignored pins are health warnings, by name only. Client pins are no longer
   listed as unknown `STANDARD_FLAGS_*` variables.
@@ -33,10 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StandardFlags::Stores::AppStore.new(bundle_id:, country:)` asks Apple's
   public iTunes lookup API in the background (a thread; one refresh at a
   time per process, a forked child starts its own): at most hourly, backing
-  off from 5 minutes up to an hour after failures, with one overall
-  5-second deadline per fetch and a 256 KiB body cap; `refresh!` fetches
-  synchronously. Failures emit `store_lookup_failed.standard_flags`
-  (`store`, `client`, `reason`). Google Play has no public API, so Android
+  off from 5 minutes up to an hour after failures (a runner that can't
+  start counts as one), with one overall 5-second deadline per fetch,
+  shorter phase timeouts, the connection closed on every path, and a 256 KiB
+  body cap; `refresh!` fetches synchronously. Failures emit
+  `store_lookup_failed.standard_flags` (`store`, `client`, `reason`) after
+  the fetch has ended. Google Play has no public API, so Android
   uses `available:` alone.
 - **`StandardFlags::ClientStatus.for(client, group:)`** and the
   `StandardFlags::ClientStatus::Controller` mixin
@@ -48,17 +52,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Cache-Control: max-age=60, private` and a Vary on the client headers.
   A prerelease of exactly the minimum or recommended version meets it.
   Works on API and Base controllers.
-- **426 guard.** `requires_client_version only:, except:, group:, with:` on
+- **426 guard.** `requires_client_version only:, except:, group:, with:, override:` on
   `StandardFlags::Controller` answers 426 `client_upgrade_required` through
   `with:`, `config.controller_responder` or a JSON:API body with `meta:
   {min_version, store_url}` (always JSON, whatever the Accept header),
   handing responders a `StandardFlags::Controller::UpgradeDenial`.
-  `skip_client_version_check only:, except:` turns it off in a subclass.
-  Builds in their grace window pass; unknown versions pass unless
-  `config.require_client_version = true`. The guard and the status endpoint
-  read the client the same way (`standard_flags_upgrade_client`: the
-  X-Client-* headers, with fields they lack from the request context's
-  client). `StandardFlags::ClientUpgradeRequired` can be raised by app code
+  One guard per controller hierarchy: a second declaration (in the class or
+  under an inherited one) raises `ConfigurationError` unless it passes
+  `override: true`; `skip_client_version_check only:, except:` narrows an
+  inherited guard. Builds in their grace window pass; unknown versions pass
+  unless `config.require_client_version = true`. The guard, the status
+  endpoint and the flag guards read the same client
+  (`standard_flags_upgrade_client`): the client the request context names,
+  whole, else the X-Client-* headers' client, whole. `StandardFlags::ClientUpgradeRequired` can be raised by app code
   and is answered the same way, even past an app's later `rescue_from
   StandardError`.
 - **Compatibility windows.** `compat :k, until_clients: { platform =>
@@ -69,13 +75,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `standard_flags_compat_stats` table: never during an evaluation, at most
   once per `evaluation_tracking_interval` per process, failed writes
   included (one `compat_tracking_failed` event per interval, reported once
-  per process). The first successful write records each window's tracking
-  marker. Operator reads don't count; a forked child drops inherited
-  counts. `flags:stale` says a window can be removed only after 14 days of
-  tracking, 14 days without hits, and once it has passed on every listed
-  platform, and says "not enough data" before that.
+  per process). Every successful write refreshes each window's tracking
+  marker (first seen, last flushed), at least once per interval. Operator
+  reads don't count; a forked child drops inherited counts. `flags:stale`
+  says a window can be removed only after 14 days of tracking, a successful
+  write within 2 days, 14 days without hits, and once it has passed on every
+  listed platform; it says "not enough data" or "tracking unhealthy since"
+  otherwise.
   `Diagnostics.report[:compat]` and the MCP `get_flag` tool (for compat flags
-  with a window) show the counts and `tracking_since`. Stores gain
+  with a window) show the counts, `tracking_since` and `last_flushed_at`. Stores gain
   `record_compat` and `compat_stats` (nil from stores that don't keep them).
 - The migrations generator writes a second, additive migration,
   `create_standard_flags_compat_stats`. Rerunning it adds only what is

@@ -171,18 +171,24 @@ RSpec.describe StandardFlags::Controller, ".requires_client_version" do
       expect(last_response.status).to eq(200)
     end
 
-    it "uses a client the app's context names, with the headers winning field by field" do
-      get "/upgrade/context"
-      expect(last_response.status).to eq(426)
-      get "/upgrade/context", {}, client("android", "9.9.9")
-      expect(last_response.status).to eq(200)
-      get "/upgrade/context", {}, { "HTTP_X_CLIENT_VERSION" => "0.5.0" }
-      expect(last_response.status).to eq(200)
+    it "uses the client the app's context names whole, whatever the headers say" do
+      [ {}, client("android", "9.9.9"), { "HTTP_X_CLIENT_VERSION" => "0.5.0" }, client("ios", "9.9.9") ].each do |headers|
+        get "/upgrade/context", {}, headers
+        expect(last_response.status).to eq(426), headers.inspect
+      end
     end
 
-    it "agrees with GET /client/status about every request" do
+    it "never mixes fields from the context's client and the headers, and reads what the flag guards read" do
+      get "/context/clients", {}, { "HTTP_X_CLIENT_PLATFORM" => "ios", "HTTP_X_CLIENT_VERSION" => "3.0.0" }
+      expect(json).to eq("upgrade" => { "platform" => "android", "version" => "0.1.0" },
+                         "flags" => { "platform" => "android", "version" => "0.1.0" })
+      get "/client/status", {}, { "HTTP_X_CLIENT_PLATFORM" => "ios", "HTTP_X_CLIENT_VERSION" => "3.0.0" }
+      expect(json).to include("platform" => "ios", "version" => "3.0.0")
+    end
+
+    it "agrees with GET /client/status about every request, mixed sources included" do
       requests = [ {}, client("android", "9.9.9"), client("android", "0.3.0"), { "HTTP_X_CLIENT_VERSION" => "0.4.0" },
-                   client("ios", "1.0.0"), client("palm") ]
+                   client("ios", "1.0.0"), client("palm"), { "HTTP_X_CLIENT_PLATFORM" => "ios" } ]
       requests.each do |headers|
         get "/context/client/status", {}, headers
         status = json["status"]
@@ -196,7 +202,18 @@ RSpec.describe StandardFlags::Controller, ".requires_client_version" do
       expect([ last_response.status, last_response.body ]).to eq([ 200, "orders" ])
       get "/upgrade/orders", {}, client("android", "0.1.0")
       expect(last_response.status).to eq(426)
-      expect(UpgradeSkippedController.standard_flags_client_version_options).to eq(group: nil, responder: nil)
+      expect(UpgradeSkippedController.standard_flags_client_version_options).to include(group: nil, responder: nil, owner: UpgradeController)
+    end
+
+    it "refuses a second declaration in the same class, or one replacing an inherited guard, unless override: true" do
+      expect { Class.new(DummyBaseController) { requires_client_version only: :a and requires_client_version only: :b } }
+        .to raise_error(StandardFlags::ConfigurationError, /declares requires_client_version again \(already declared here\)/)
+      expect { Class.new(UpgradeController) { requires_client_version only: :create, group: :kiosk } }
+        .to raise_error(StandardFlags::ConfigurationError, /inherited from UpgradeController.*override: true.*skip_client_version_check/)
+      kiosk = Class.new(UpgradeController) { requires_client_version only: :create, group: :kiosk, override: true }
+      expect(kiosk.standard_flags_client_version_options).to include(group: :kiosk, owner: kiosk)
+      expect(UpgradeController.standard_flags_client_version_options).to include(group: nil, owner: UpgradeController)
+      expect { Class.new(DummyBaseController) { requires_client_version override: :yes } }.to raise_error(ArgumentError, /override:/)
     end
 
     it "refuses a with: that can't answer" do

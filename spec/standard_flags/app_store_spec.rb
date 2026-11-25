@@ -51,7 +51,7 @@ RSpec.describe StandardFlags::Stores::AppStore do
     run_jobs
     expect(store.call(app)).to eq(StandardFlags::Version.parse("2.1.0"))
     expect(Net::HTTP).to have_received(:start)
-      .with("itunes.apple.com", 443, use_ssl: true, open_timeout: 5, read_timeout: 5, write_timeout: 5, ssl_timeout: 5)
+      .with("itunes.apple.com", 443, use_ssl: true, open_timeout: 4.0, read_timeout: 4.0, write_timeout: 4.0, ssl_timeout: 4.0)
     expect(http).to have_received(:request).with(having_attributes(path: "/lookup?bundleId=com.example.app&country=gb"))
   end
 
@@ -90,7 +90,7 @@ RSpec.describe StandardFlags::Stores::AppStore do
     events = failures { 5.times { store.refresh!(app) } }
     expect(events.map { |event| event[:reason] })
       .to eq([ "HTTP 503", "JSON::ParserError", "no usable version", "no usable version", "response too large" ])
-    expect(events.first).to eq(store: "app_store", client: :ios_app, reason: "HTTP 503")
+    expect(events.first).to eq(store: "StandardFlags::Stores::AppStore", client: :ios_app, reason: "HTTP 503")
     expect(store.call(app)).to be_nil
   end
 
@@ -128,11 +128,67 @@ RSpec.describe StandardFlags::Stores::AppStore do
     expect(jobs.size).to eq(2)
   end
 
-  it "survives a runner that can't start the refresh" do
-    broken = described_class.new(bundle_id: "com.example.app", runner: ->(&_job) { raise ThreadError, "can't create Thread" })
-    events = failures { expect(broken.call(app)).to be_nil }
-    expect(events).to eq([ { store: "app_store", client: :ios_app, reason: "ThreadError" } ])
-    expect { broken.call(app) }.not_to raise_error
+  it "backs off a runner that can't start the refresh, as it would a failed fetch" do
+    broken = described_class.new(bundle_id: "com.example.app", clock: -> { now.first },
+                                 runner: ->(&_job) { raise ThreadError, "can't create Thread" })
+    events = failures { 100.times { expect(broken.call(app)).to be_nil } }
+    expect(events).to eq([ { store: "StandardFlags::Stores::AppStore", client: :ios_app, reason: "ThreadError" } ])
+    now[0] += 300
+    expect(failures { broken.call(app) }.size).to eq(1)
+    now[0] += 300
+    expect(failures { broken.call(app) }).to eq([])
+  end
+
+  it "reports a failure after the deadline has ended, so a slow subscriber isn't cut short" do
+    slow = described_class.new(bundle_id: "com.example.app", deadline: 0.05, runner: ->(&job) { job.call })
+    responses << Net::HTTPServiceUnavailable.new("1.1", "503", "x")
+    seen = []
+    subscriber = ActiveSupport::Notifications.subscribe("store_lookup_failed.standard_flags") do |*, payload|
+      sleep 0.1
+      seen << payload[:reason]
+    end
+    slow.refresh!
+    expect(seen).to eq([ "HTTP 503" ])
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscriber)
+  end
+
+  # A local server that accepts connections and never answers, so the TLS
+  # handshake stalls. Yields its port; closes everything afterwards.
+  def with_blackhole_server
+    server = TCPServer.new("127.0.0.1", 0)
+    held = []
+    acceptor = Thread.new { loop { held << server.accept } }
+    yield server.addr[1]
+  ensure
+    acceptor&.kill
+    held&.each(&:close)
+    server&.close
+  end
+
+  def open_sockets_to(port)
+    ObjectSpace.each_object(TCPSocket).count { |socket| !socket.closed? && socket.remote_address.ip_port == port rescue false } # rubocop:disable Style/RescueModifier
+  end
+
+  it "leaves no socket open when a fetch stalls past its deadline" do
+    allow(Net::HTTP).to receive(:start).and_call_original
+    with_blackhole_server do |port|
+      blackhole = described_class.new(bundle_id: "com.example.app", deadline: 0.2, runner: ->(&job) { job.call })
+      blackhole.define_singleton_method(:uri) { URI("https://127.0.0.1:#{port}/lookup") }
+      GC.disable
+      expect(failures { 3.times { blackhole.refresh! } }.size).to eq(3)
+      expect(open_sockets_to(port)).to eq(0)
+    ensure
+      GC.enable
+    end
+  end
+
+  it "lets refresh! leave a running background refresh's claim alone" do
+    store.call(app)
+    responses << lookup("2.0.0")
+    store.refresh!(app)
+    store.call(app)
+    expect(jobs.size).to eq(1)
   end
 
   it "works as a client's store_lookup" do

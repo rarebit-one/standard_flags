@@ -27,10 +27,12 @@ module StandardFlags
   # ENV break-glass pins beat the code and any store lookup, as a flag's
   # pin does: STANDARD_FLAGS_CLIENT_<NAME>_MIN_VERSION, _SINCE,
   # _RECOMMENDED and _AVAILABLE. A pin that doesn't parse is ignored (and
-  # reported, by name only). So is a pinned minimum above the code's one
-  # (or on a client with none) without a pinned `_SINCE`: a break-glass
-  # raise can't skip the grace window. Lowering the minimum needs no
-  # `_SINCE`.
+  # reported, by name only). So is a pinned minimum that raises the code's
+  # one (or sets one where the code has none) without a pinned `_SINCE`: a
+  # break-glass raise can't skip the grace window. Lowering the minimum
+  # needs no `_SINCE`; a pin lowers it only when every version that meets
+  # the code's minimum also meets the pin (so `1.0.0-rc.1` against `1.0.0`
+  # is a raise: it stops `1.0.0-beta.1`, which `1.0.0` lets through).
   ClientApp = Data.define(:name, :platform, :group, :min_version, :since, :grace_days, :recommended, :available,
                           :store_url, :store_lookup)
 
@@ -195,17 +197,26 @@ module StandardFlags
 
     private
 
-    # A pinned minimum above the code's (or on a client with none) needs a
-    # pinned since, so a break-glass raise gets its own grace window
-    # instead of reusing the code's old date.
+    # A pinned minimum that raises the code's (or sets one where it has
+    # none) needs a pinned since, so a break-glass raise gets its own grace
+    # window instead of reusing the code's old date.
     def refuse_unscheduled_minimum(values, pinned, rejected)
       var = env_var(:min_version)
       return unless pinned.include?(var) && !pinned.include?(env_var(:since))
-      return if min_version && values[:min_version] <= min_version
+      return if min_version && relaxes?(values[:min_version], min_version)
 
       pinned.delete(var)
       rejected << var
       values[:min_version] = min_version
+    end
+
+    # Whether every version that meets `code` (by ClientStatus.meets?) also
+    # meets `pin`. Meeting is monotonic, so it is enough to check the
+    # lowest version that meets `code`: `code` itself when it is a
+    # prerelease, else the lowest prerelease of its release (`1.0.0-0`).
+    def relaxes?(pin, code)
+      lowest = code.prerelease? ? code : Version.parse("#{code.major}.#{code.minor}.#{code.patch}-0")
+      ClientStatus.meets?(lowest, pin)
     end
 
     def read(env, var)

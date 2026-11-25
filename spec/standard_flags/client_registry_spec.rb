@@ -161,6 +161,23 @@ RSpec.describe StandardFlags::ClientApp do
       expect(policy.rejected).to eq(%w[STANDARD_FLAGS_CLIENT_ANDROID_APP_SINCE STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION])
     end
 
+    it "counts a prerelease of the code's minimum as a raise: it stops that release's betas, which the code lets through" do
+      expect(app.resolve(pins(min_version: "0.4.0-rc.1")).rejected).to eq([ "STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION" ])
+      expect(app.resolve(pins(min_version: "0.3.9-rc.1")).min_version.to_s).to eq("0.3.9-rc.1")
+      policy = app.resolve(pins(min_version: "0.4.0-rc.1", since: "2026-12-09"))
+      expect([ policy.min_version.to_s, policy.enforce_on ]).to eq([ "0.4.0-rc.1", Date.new(2026, 12, 16) ])
+    end
+
+    context "with a prerelease minimum in the code" do
+      let(:android_attributes) { android.merge(min_version: "0.4.0-rc.2", recommended: nil) }
+
+      it "lowers it with an earlier prerelease or its release, and raises it with a later prerelease" do
+        expect(app.resolve(pins(min_version: "0.4.0-rc.1")).rejected).to eq([])
+        expect(app.resolve(pins(min_version: "0.4.0")).rejected).to eq([])
+        expect(app.resolve(pins(min_version: "0.4.0-rc.3")).rejected).to eq([ "STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION" ])
+      end
+    end
+
     it "takes a lowered (or equal) minimum without _SINCE: it can only relax enforcement" do
       expect(app.resolve(pins(min_version: "0.3.0")).min_version.to_s).to eq("0.3.0")
       expect(app.resolve(pins(min_version: "0.4.0")).pinned).to eq([ "STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION" ])

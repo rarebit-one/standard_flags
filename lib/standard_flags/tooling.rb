@@ -75,13 +75,15 @@ module StandardFlags
     #
     # With `config.track_compat` on, it says a compat window "can be
     # removed" only when tracking has run for at least 14 days (the flag's
-    # tracking marker, written by the first successful write), no hit has
+    # tracking marker), a write has succeeded in the last 2 days (the
+    # marker's last flush, so missing hits really mean no use), no hit has
     # landed in the last 14 days, and the window has passed on every
     # platform `until_clients:` names. A platform's window has passed when
     # every client declared for it enforces a minimum at or above the listed
     # version today (UTC), or when no client below that version has used
     # the flag (no hits from the platform, or its oldest version seen is at
-    # or above it). Until tracking is old enough it says "not enough data".
+    # or above it). Until tracking is old enough it says "not enough data";
+    # when writes have stopped succeeding, "tracking unhealthy since …".
     class Stale
       SETTLED_AFTER = 30 * 86_400
       UNUSED_AFTER = 14 * 86_400
@@ -164,6 +166,11 @@ module StandardFlags
         if since.nil? || since > @now - Runtime::CompatTracker::IDLE
           tracking = since ? "tracking since #{day(since)}" : "no tracking recorded yet"
           return "compat #{definition.key}: not enough data to judge its window (#{tracking}; needs 14 days)"
+        end
+        flushed = marker.first.last_flushed_at
+        if flushed.nil? || flushed < @now - Runtime::CompatTracker::HEALTHY
+          return "compat #{definition.key}: tracking unhealthy since #{day(flushed || since)} (no successful write since); " \
+                 "not enough data to judge its window"
         end
 
         last = stats.filter_map(&:last_hit_at).max
