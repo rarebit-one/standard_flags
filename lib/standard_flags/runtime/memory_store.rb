@@ -44,6 +44,7 @@ module StandardFlags
         @removed = []
         @reads = Hash.new(0)
         @pending = nil # after_commit blocks of the write in progress
+        @compat = {}
       end
 
       def revision
@@ -168,6 +169,25 @@ module StandardFlags
 
             @rules[key] = rule.with(last_evaluated_at: now)
           end
+        end
+      end
+
+      def record_compat(stats)
+        @mutex.synchronize do
+          @reads[:record_compat] += 1
+          now = Time.now.utc
+          stats.each do |stat|
+            id = [ stat.key.to_s, stat.platform ]
+            @compat[id] = CompatStats.merge(@compat[id], stat, now: now)
+          end
+          stats.size
+        end
+      end
+
+      def compat_stats(keys = nil)
+        @mutex.synchronize do
+          @reads[:compat_stats] += 1
+          @compat.values.select { |stat| keys.nil? || keys.include?(stat.key) }.sort_by { |stat| [ stat.key, stat.platform ] }
         end
       end
 

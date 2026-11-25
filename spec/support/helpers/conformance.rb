@@ -78,6 +78,28 @@ module ConformanceRegistry
 
   # Evaluation values in the wire shape the fixtures use: booleans stay
   # booleans, modes and variants are strings.
+  CLIENT_HEADERS = { "platform" => "X-Client-Platform", "version" => "X-Client-Version", "build" => "X-Client-Build" }.freeze
+
+  # A client_status case's payload: the fixture's platforms and clients
+  # (with the case's store lookups), the case's headers, today and ENV pins.
+  def client_status(fixture, example)
+    StandardFlags.config.client_platforms = fixture.fetch("client_platforms")
+    lookups = example.fetch("store_lookup", {})
+    clients = fixture.fetch("clients")
+    StandardFlags.define do
+      clients.each do |entry|
+        attributes = entry.except("name", "grace_days").transform_keys(&:to_sym)
+        attributes[:grace] = entry["grace_days"] if entry.key?("grace_days")
+        attributes[:store_lookup] = ->(_app) { lookups[entry["name"]] } if lookups.key?(entry["name"])
+        client entry.fetch("name"), **attributes
+      end
+    end
+    headers = example.fetch("client").to_h { |field, value| [ CLIENT_HEADERS.fetch(field), value.to_s ] }
+    StandardFlags::ClientStatus.for(StandardFlags::Client.from_headers(headers), group: example["group"]&.to_sym,
+                                    today: Date.iso8601(example.fetch("today") { fixture.fetch("today") }),
+                                    env: example.fetch("env_vars", {})).to_h
+  end
+
   def wire(evaluation)
     {
       "value" => evaluation.value.is_a?(Symbol) ? evaluation.value.to_s : evaluation.value,

@@ -1,0 +1,359 @@
+{
+  "description": "GET /client/status: the client registry, the platforms the server recognises, the calling client's X-Client-* header values and today's UTC date in; the status payload out. Clients use `expected` as golden payloads for their upgrade-state parsing. ENV pins and store lookups, which only the server has, are in upgrade/client_status_server.json.",
+  "suite": "client_status",
+  "scope": "wire",
+  "client_platforms": [
+    "android",
+    "ios",
+    "web",
+    "desktop"
+  ],
+  "today": "2026-12-03",
+  "clients": [
+    {
+      "name": "android_app",
+      "platform": "android",
+      "min_version": "0.4.0",
+      "since": "2026-12-01",
+      "grace_days": 7,
+      "recommended": "0.5.0",
+      "available": "0.5.0",
+      "store_url": "https://example.com/store/android"
+    },
+    {
+      "name": "ios_app",
+      "platform": "ios",
+      "min_version": "2.0.0",
+      "since": "2026-11-01",
+      "grace_days": 7,
+      "recommended": "2.1.0",
+      "available": "1.9.0",
+      "store_url": "https://example.com/store/ios"
+    },
+    {
+      "name": "desktop_app",
+      "platform": "desktop",
+      "recommended": "3.0.0"
+    },
+    {
+      "name": "kiosk_android",
+      "platform": "android",
+      "group": "kiosk",
+      "min_version": "1.2.0",
+      "since": "2026-12-03",
+      "grace_days": 0
+    }
+  ],
+  "cases": [
+    {
+      "name": "no client headers: unknown, never told to upgrade",
+      "client": {},
+      "expected": {
+        "status": "unknown",
+        "platform": null,
+        "version": null,
+        "min_version": null,
+        "recommended": null,
+        "enforce_at": null,
+        "store_url": null
+      }
+    },
+    {
+      "name": "a platform this app doesn't recognise: unknown",
+      "client": {
+        "platform": "watch",
+        "version": "0.1.0"
+      },
+      "expected": {
+        "status": "unknown",
+        "platform": null,
+        "version": "0.1.0",
+        "min_version": null,
+        "recommended": null,
+        "enforce_at": null,
+        "store_url": null
+      }
+    },
+    {
+      "name": "a known platform without a version: unknown, with the platform's versions and store URL",
+      "client": {
+        "platform": "android"
+      },
+      "expected": {
+        "status": "unknown",
+        "platform": "android",
+        "version": null,
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": null,
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "a version that doesn't parse is dropped: unknown",
+      "client": {
+        "platform": "android",
+        "version": "v0.3"
+      },
+      "expected": {
+        "status": "unknown",
+        "platform": "android",
+        "version": null,
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": null,
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "below the minimum during the grace window: recommended, with enforce_at",
+      "client": {
+        "platform": "android",
+        "version": "0.3.9"
+      },
+      "expected": {
+        "status": "upgrade_recommended",
+        "platform": "android",
+        "version": "0.3.9",
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": "2026-12-08",
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "the last day of the grace window",
+      "client": {
+        "platform": "android",
+        "version": "0.3.9"
+      },
+      "today": "2026-12-07",
+      "expected": {
+        "status": "upgrade_recommended",
+        "platform": "android",
+        "version": "0.3.9",
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": "2026-12-08",
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "enforcement starts on enforce_at (since + grace)",
+      "client": {
+        "platform": "android",
+        "version": "0.3.9"
+      },
+      "today": "2026-12-08",
+      "expected": {
+        "status": "upgrade_required",
+        "platform": "android",
+        "version": "0.3.9",
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": "2026-12-08",
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "a prerelease of exactly the minimum meets it (a beta or TestFlight build of the required release)",
+      "client": {
+        "platform": "android",
+        "version": "0.4.0-rc.1"
+      },
+      "today": "2026-12-08",
+      "expected": {
+        "status": "upgrade_recommended",
+        "platform": "android",
+        "version": "0.4.0-rc.1",
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": null,
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "a prerelease of an older version is below the minimum",
+      "client": {
+        "platform": "android",
+        "version": "0.3.10-beta.1"
+      },
+      "today": "2026-12-08",
+      "expected": {
+        "status": "upgrade_required",
+        "platform": "android",
+        "version": "0.3.10-beta.1",
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": "2026-12-08",
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "a prerelease of exactly the recommended version meets it",
+      "client": {
+        "platform": "android",
+        "version": "0.5.0-beta.2"
+      },
+      "expected": {
+        "status": "ok",
+        "platform": "android",
+        "version": "0.5.0-beta.2",
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": null,
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "at the minimum but below recommended: recommended, no enforce_at",
+      "client": {
+        "platform": "android",
+        "version": "0.4"
+      },
+      "today": "2026-12-08",
+      "expected": {
+        "status": "upgrade_recommended",
+        "platform": "android",
+        "version": "0.4.0",
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": null,
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "at recommended: ok; build metadata is ignored",
+      "client": {
+        "platform": "Android",
+        "version": "0.5.0+412",
+        "build": "412"
+      },
+      "expected": {
+        "status": "ok",
+        "platform": "android",
+        "version": "0.5.0",
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": null,
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "store ceiling: the minimum and recommended are never above the newest version in the store",
+      "client": {
+        "platform": "ios",
+        "version": "1.9.0"
+      },
+      "expected": {
+        "status": "ok",
+        "platform": "ios",
+        "version": "1.9.0",
+        "min_version": "1.9.0",
+        "recommended": "1.9.0",
+        "enforce_at": null,
+        "store_url": "https://example.com/store/ios"
+      }
+    },
+    {
+      "name": "store ceiling: below the capped minimum after the grace window is required",
+      "client": {
+        "platform": "ios",
+        "version": "1.8.5"
+      },
+      "expected": {
+        "status": "upgrade_required",
+        "platform": "ios",
+        "version": "1.8.5",
+        "min_version": "1.9.0",
+        "recommended": "1.9.0",
+        "enforce_at": "2026-11-08",
+        "store_url": "https://example.com/store/ios"
+      }
+    },
+    {
+      "name": "recommended only (no minimum): below it is recommended",
+      "client": {
+        "platform": "desktop",
+        "version": "2.9.9"
+      },
+      "expected": {
+        "status": "upgrade_recommended",
+        "platform": "desktop",
+        "version": "2.9.9",
+        "min_version": null,
+        "recommended": "3.0.0",
+        "enforce_at": null,
+        "store_url": null
+      }
+    },
+    {
+      "name": "a recognised platform with no client declared: ok, nothing to enforce",
+      "client": {
+        "platform": "web",
+        "version": "1.0.0"
+      },
+      "expected": {
+        "status": "ok",
+        "platform": "web",
+        "version": "1.0.0",
+        "min_version": null,
+        "recommended": null,
+        "enforce_at": null,
+        "store_url": null
+      }
+    },
+    {
+      "name": "a client group picks its own client for the platform; grace 0 enforces from since",
+      "client": {
+        "platform": "android",
+        "version": "1.1.0"
+      },
+      "group": "kiosk",
+      "expected": {
+        "status": "upgrade_required",
+        "platform": "android",
+        "version": "1.1.0",
+        "min_version": "1.2.0",
+        "recommended": null,
+        "enforce_at": "2026-12-03",
+        "store_url": null
+      }
+    },
+    {
+      "name": "the day before since + grace 0",
+      "client": {
+        "platform": "android",
+        "version": "1.1.0"
+      },
+      "group": "kiosk",
+      "today": "2026-12-02",
+      "expected": {
+        "status": "upgrade_recommended",
+        "platform": "android",
+        "version": "1.1.0",
+        "min_version": "1.2.0",
+        "recommended": null,
+        "enforce_at": "2026-12-03",
+        "store_url": null
+      }
+    },
+    {
+      "name": "a group with no client for the platform: ok",
+      "client": {
+        "platform": "ios",
+        "version": "0.1.0"
+      },
+      "group": "kiosk",
+      "expected": {
+        "status": "ok",
+        "platform": "ios",
+        "version": "0.1.0",
+        "min_version": null,
+        "recommended": null,
+        "enforce_at": null,
+        "store_url": null
+      }
+    }
+  ]
+}

@@ -1,9 +1,10 @@
 require "spec_helper"
 
-# Runs conformance/wire: delivery.json (what the server tells a client) and
+# Runs conformance/wire: delivery.json (what the server tells a client),
 # client_state.json (what a client reads from it, through the reference
-# client in spec/support/helpers/client_state.rb). Kotlin and TypeScript
-# client libraries run the same files; see conformance/README.md.
+# client in spec/support/helpers/client_state.rb) and client_status.json
+# (what GET /client/status answers). Kotlin and TypeScript client libraries
+# run the same files; see conformance/README.md.
 RSpec.describe "wire conformance fixtures" do
   describe "delivery.json" do
     fixture = ConformanceRegistry.load(ConformanceRegistry.path("wire/delivery.json"))
@@ -47,5 +48,32 @@ RSpec.describe "wire conformance fixtures" do
         end
       end
     end
+  end
+
+  {
+    "wire/client_status.json" => "wire", "upgrade/client_status_server.json" => "server"
+  }.each do |path, scope|
+    describe path do
+      fixture = ConformanceRegistry.load(ConformanceRegistry.path(path))
+
+      fixture.fetch("cases").each do |example|
+        it example.fetch("name") do
+          expect(ConformanceRegistry.client_status(fixture, example)).to eq(example.fetch("expected"))
+        end
+      end
+
+      it "is #{scope}-scoped, and only a server file uses ENV pins or store lookups" do
+        expect(fixture.fetch("scope")).to eq(scope)
+        extras = fixture.fetch("cases").flat_map { |example| example.keys & %w[env_vars store_lookup scope] }
+        expect(extras.empty?).to be(scope == "wire")
+      end
+    end
+  end
+
+  it "covers every status between the client_status files" do
+    statuses = %w[wire/client_status.json upgrade/client_status_server.json].flat_map do |path|
+      ConformanceRegistry.load(ConformanceRegistry.path(path)).fetch("cases").map { |example| example.dig("expected", "status") }
+    end
+    expect(statuses.uniq).to match_array(StandardFlags::ClientStatus::STATUSES)
   end
 end

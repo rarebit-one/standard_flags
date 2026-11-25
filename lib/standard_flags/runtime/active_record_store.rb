@@ -28,6 +28,15 @@ module StandardFlags
                    "WHERE NOT EXISTS (SELECT 1 FROM standard_flags_state)".freeze
       LOCK_STATE = "LOCK TABLE standard_flags_state IN SHARE ROW EXCLUSIVE MODE".freeze
       MEMBERSHIP_INSERT_COLUMNS = %i[rule_id cohort_id unit unit_key value expires_at created_at updated_at].freeze
+      # Hits add up and the later hit wins. A row unused for longer than
+      # CompatTracker::IDLE before this hit takes the new oldest version
+      # (SET expressions read the row as it was). first_seen_at is never
+      # updated.
+      COMPAT_UPSERT = "hits = standard_flags_compat_stats.hits + EXCLUDED.hits, " \
+                      "oldest_version = CASE WHEN standard_flags_compat_stats.last_hit_at < " \
+                      "EXCLUDED.last_hit_at - make_interval(secs => #{Runtime::CompatTracker::IDLE}) " \
+                      "THEN EXCLUDED.oldest_version ELSE standard_flags_compat_stats.oldest_version END, " \
+                      "last_hit_at = GREATEST(standard_flags_compat_stats.last_hit_at, EXCLUDED.last_hit_at)".freeze
 
       # nil when standard_flags_state has no row yet: there is no revision,
       # and the cache reloads at every check until a write creates one.
@@ -169,6 +178,39 @@ module StandardFlags
                             .lock("FOR UPDATE SKIP LOCKED").select(:id)
           Models::Record.with_connection do
             Models::Rule.where(id: due).update_all([ "last_evaluated_at = ?", Time.now.utc ])
+          end
+        end
+      end
+
+      # One upsert that adds the hits and keeps the later hit, then, for each
+      # row whose oldest version may move down, a compare-and-set update
+      # (versions compare as SemVer, which SQL can't). Skipped (nil) inside
+      # an open transaction, like touch_evaluated.
+      def record_compat(stats)
+        return nil if Models::Record.connection_pool.active_connection&.transaction_open?
+        return 0 if stats.empty?
+
+        compat_table!
+        guard("compat tracking") do
+          Models::Record.with_connection do
+            now = Time.now.utc
+            rows = stats.map do |stat|
+              { key: stat.key.to_s, platform: stat.platform, hits: stat.hits, oldest_version: stat.oldest_version,
+                last_hit_at: stat.last_hit_at, first_seen_at: now }
+            end
+            Models::CompatStat.upsert_all(rows, unique_by: %i[key platform], on_duplicate: Arel.sql(COMPAT_UPSERT))
+            stats.each { |stat| lower_oldest(stat) if stat.oldest_version }
+          end
+          stats.size
+        end
+      end
+
+      def compat_stats(keys = nil)
+        read("compat stats") do
+          scope = Models::CompatStat.order(:key, :platform)
+          scope = scope.where(key: keys) if keys
+          scope.pluck(:key, :platform, :hits, :oldest_version, :last_hit_at, :first_seen_at).map do |key, platform, hits, oldest, last, first|
+            CompatStat.new(key: key, platform: platform, hits: hits, oldest_version: oldest, last_hit_at: last, first_seen_at: first)
           end
         end
       end
@@ -382,6 +424,28 @@ module StandardFlags
         owner = Models::Membership.arel_table[column].eq(model.arel_table[:id])
         count = Models::Membership.where(removed_at: nil).where(owner).select(Arel.star.count).to_sql
         model.where(id: ids.uniq).update_all("member_count = (#{count})")
+      end
+
+      # A clear error for an app that turned tracking on without running the
+      # compat stats migration (upsert_all would complain about an index).
+      def compat_table!
+        exists = guard("compat tracking") { Models::CompatStat.table_exists? }
+        return if exists
+
+        raise StoreError.new("compat tracking failed: standard_flags_compat_stats is missing; run " \
+                             "bin/rails g standard_flags:migrations and migrate", cause_class: "StandardFlags::MissingCompatTable")
+      end
+
+      # Versions only ever move down, so a lost race is retried a few times
+      # and then left to the next flush's version, which is no newer.
+      def lower_oldest(stat)
+        row = Models::CompatStat.where(key: stat.key.to_s, platform: stat.platform)
+        3.times do
+          current = row.pick(:oldest_version)
+          return if current == stat.oldest_version || CompatStats.older(current, stat.oldest_version) == current
+
+          return if row.where(oldest_version: current).update_all(oldest_version: stat.oldest_version).positive?
+        end
       end
 
       def guard(what)

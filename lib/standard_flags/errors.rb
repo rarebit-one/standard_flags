@@ -58,6 +58,37 @@ module StandardFlags
     end
   end
 
+  # A client-facing "this build is too old" answer. StandardFlags::Controller
+  # raises nothing for `requires_client_version` (the guard answers
+  # directly), but app code can raise it, and the controller renders it
+  # exactly like the guard: 426 `client_upgrade_required`, through
+  # `config.controller_responder` when set.
+  #
+  #   status = StandardFlags::ClientStatus.for(client)
+  #   raise StandardFlags::ClientUpgradeRequired.new(status) if status.upgrade_required?
+  #
+  # Takes a StandardFlags::ClientStatus::Result, or keywords.
+  class ClientUpgradeRequired < Error
+    attr_reader :client, :platform, :version, :min_version, :store_url, :status
+
+    def initialize(result = nil, message = nil, client: nil, platform: nil, version: nil, min_version: nil, store_url: nil)
+      if result
+        client ||= result.client_app&.name
+        platform ||= result.platform
+        version ||= result.version
+        min_version ||= result.min_version
+        store_url ||= result.store_url
+      end
+      @client = client&.to_sym
+      @platform = platform
+      @version = version&.to_s
+      @min_version = min_version&.to_s
+      @store_url = store_url
+      @status = 426
+      super(message || [ "client", platform, @version, "must upgrade", (@min_version && "to #{@min_version}") ].compact.join(" "))
+    end
+  end
+
   # Reported (never raised) through Rails.error when an ENV pin can't be
   # parsed. The message names the variable, never its value.
   class PinRejected < Error; end

@@ -56,16 +56,17 @@ module StandardFlags
       end
     end
 
-    attr_reader :tombstones, :units
+    attr_reader :tombstones, :units, :clients
 
     def self.empty
       new(flags: {}, tombstones: {}, units: {}, env_resolver: nil)
     end
 
-    def initialize(flags:, tombstones:, units:, env_resolver:)
+    def initialize(flags:, tombstones:, units:, env_resolver:, clients: {})
       @flags = flags.freeze
       @tombstones = tombstones.freeze
       @units = units.freeze
+      @clients = clients.freeze
       @env_resolver = env_resolver
       freeze
     end
@@ -82,7 +83,16 @@ module StandardFlags
       raise ArgumentError, "unknown unit :#{unit}" unless @units.key?(unit)
 
       probe = Unit.new(name: unit, resolver: ->(_context) { unit_key }, key: nil)
-      Registry.new(flags: @flags, tombstones: @tombstones, units: @units.merge(unit => probe), env_resolver: @env_resolver)
+      Registry.new(flags: @flags, tombstones: @tombstones, units: @units.merge(unit => probe), env_resolver: @env_resolver,
+                   clients: @clients)
+    end
+
+    # The declared client (a ClientApp) for `platform` in `group` (nil is the
+    # default group), or nil.
+    def client_for(platform, group: nil)
+      platform = platform.to_s
+      group = group&.to_sym
+      @clients.each_value.find { |client| client.platform == platform && client.group == group }
     end
 
     def key?(key)
@@ -168,6 +178,7 @@ module StandardFlags
         @flags = {}
         @tombstones = {}
         @units = {}
+        @clients = {}
         @env_resolver = nil
       end
 
@@ -214,12 +225,32 @@ module StandardFlags
         @tombstones[key] = Tombstone.new(key: key, removed: removed, **tombstone_serve(key, removed, serve, serve_until, until_clients))
       end
 
+      # A client app build channel: its minimum and recommended versions,
+      # store ceiling and store URL (see StandardFlags::ClientApp). One per
+      # platform, or per platform within a `group:`.
+      #
+      #   client :android_app, platform: :android, min_version: "0.4.0", since: "2026-12-01",
+      #          recommended: "0.5.0", available: "0.5.0", store_url: "https://example.com/app", grace: 7.days
+      def client(name, **attributes)
+        client = ClientApp.declare(name, **attributes)
+        raise DefinitionError, "client :#{client.name} is declared twice" if @clients.key?(client.name)
+
+        clash = @clients.each_value.find { |other| other.platform == client.platform && other.group == client.group }
+        if clash
+          scope = client.group ? "group :#{client.group}" : "the default group"
+          raise DefinitionError, "client :#{client.name} and client :#{clash.name} are both #{client.platform} in #{scope}; " \
+                                 "give one a group: to serve two apps on one platform"
+        end
+        @clients[client.name] = client
+      end
+
       def build
         validate_tombstones!
         validate_units!
         validate_audiences!
         validate_wire_names!
-        Registry.new(flags: @flags, tombstones: @tombstones, units: @units, env_resolver: @env_resolver)
+        validate_client_pins!
+        Registry.new(flags: @flags, tombstones: @tombstones, units: @units, env_resolver: @env_resolver, clients: @clients)
       end
 
       private
@@ -278,6 +309,17 @@ module StandardFlags
         key = reused.first
         raise DefinitionError,
           "flag :#{key} was removed on #{@tombstones[key].removed.iso8601}; keys are never reused, pick a new one"
+      end
+
+      # A client's ENV pins share the STANDARD_FLAGS_ prefix with flags' pins,
+      # so no flag's canonical pin may be one of them.
+      def validate_client_pins!
+        pins = @clients.each_value.flat_map { |client| client.env_vars.map { |var| [ var, client ] } }.to_h
+        @flags.each_value do |definition|
+          client = pins[definition.canonical_env_var] or next
+          raise DefinitionError, "#{definition.kind} :#{definition.key}'s pin #{definition.canonical_env_var} is " \
+                                 "client :#{client.name}'s pin; rename one"
+        end
       end
 
       def validate_units!

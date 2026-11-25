@@ -36,6 +36,12 @@ module StandardFlags
       class State < Record
         self.table_name = "standard_flags_state"
       end
+
+      # Compat window counts (config.track_compat), from the compat stats
+      # migration.
+      class CompatStat < Record
+        self.table_name = "standard_flags_compat_stats"
+      end
     end
 
     Runtime.filter_unit_keys!(::ActiveRecord::Base)

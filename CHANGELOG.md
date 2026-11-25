@@ -7,6 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Client registry.** `client :name, platform:, min_version:, since:,
+  recommended:, available:, store_url:, store_lookup:, grace:, group:` in
+  config/flags.rb (`StandardFlags::ClientApp`). `since:` is required with
+  `min_version:` (a Time or DateTime counts as its UTC date); a raised
+  minimum is enforced from `since + grace` (whole days, default 7, UTC
+  dates), so raising `min_version:` means moving `since:`. Clients are
+  unique per platform within a `group:`. Validated at boot, including flag
+  pins that would collide with a client's pins. `Registry#clients` and
+  `Registry#client_for(platform, group:)`.
+- ENV break-glass pins `STANDARD_FLAGS_CLIENT_<NAME>_MIN_VERSION`, `_SINCE`,
+  `_RECOMMENDED` and `_AVAILABLE` beat the code and any store lookup. A
+  raised `_MIN_VERSION` without `_SINCE` is ignored, so a break-glass raise
+  gets its own grace window; a lowered one needs no `_SINCE`. A pin lowers
+  the minimum only when every version meeting the code's minimum also meets
+  it, so a prerelease of the code's minimum is a raise. Pins in force
+  are listed in `Diagnostics.report[:clients]` (never health warnings);
+  ignored pins are health warnings, by name only. Client pins are no longer
+  listed as unknown `STANDARD_FLAGS_*` variables.
+- **Store ceiling.** The enforced minimum, and the recommended version, are
+  never above the newest version known to be in the store: a pinned
+  `_AVAILABLE`, else the client's `store_lookup:` answer, else `available:`.
+  A lookup belongs to one client and only caps that client; it answers its
+  last known version at once and never waits on the network.
+  `StandardFlags::Stores::AppStore.new(bundle_id:, country:)` asks Apple's
+  public iTunes lookup API in the background (a thread; one refresh at a
+  time per process, a forked child starts its own): at most hourly, backing
+  off from 5 minutes up to an hour after failures (a runner that can't
+  start counts as one), with one overall 5-second deadline per fetch,
+  shorter phase timeouts, the connection closed on every path, and a 256 KiB
+  body cap; `refresh!` fetches synchronously. Failures emit
+  `store_lookup_failed.standard_flags` (`store`, `client`, `reason`) after
+  the fetch has ended. Google Play has no public API, so Android
+  uses `available:` alone.
+- **`StandardFlags::ClientStatus.for(client, group:)`** and the
+  `StandardFlags::ClientStatus::Controller` mixin
+  (`standard_flags_client_status group:, max_age:`; action `client_status`),
+  for `GET /client/status`, routed before sign-in. It answers `{status,
+  platform, version, min_version, recommended, enforce_at, store_url}` with
+  `status` one of `ok`, `upgrade_recommended`, `upgrade_required` or
+  `unknown` (an unknown platform or version is never told to upgrade),
+  `Cache-Control: max-age=60, private` and a Vary on the client headers.
+  A prerelease of exactly the minimum or recommended version meets it.
+  Works on API and Base controllers.
+- **426 guard.** `requires_client_version only:, except:, group:, with:, override:` on
+  `StandardFlags::Controller` answers 426 `client_upgrade_required` through
+  `with:`, `config.controller_responder` or a JSON:API body with `meta:
+  {min_version, store_url}` (always JSON, whatever the Accept header),
+  handing responders a `StandardFlags::Controller::UpgradeDenial`.
+  One guard per controller hierarchy: a second declaration (in the class or
+  under an inherited one) raises `ConfigurationError` unless it passes
+  `override: true`; `skip_client_version_check only:, except:` narrows an
+  inherited guard. Builds in their grace window pass; unknown versions pass
+  unless `config.require_client_version = true`. The guard, the status
+  endpoint and the flag guards read the same client
+  (`standard_flags_upgrade_client`): the client the request context names,
+  whole, else the X-Client-* headers' client, whole. `StandardFlags::ClientUpgradeRequired` can be raised by app code
+  and is answered the same way, even past an app's later `rescue_from
+  StandardError`.
+- **Compatibility windows.** `compat :k, until_clients: { platform =>
+  "version" }`. With `config.track_compat = true` (off by default; needs
+  runtime rules), each evaluation counts a hit per platform, and the oldest
+  client version for allowlisted platforms (a hint from untrusted headers;
+  it starts over after 14 idle days). Counts are written behind to the new
+  `standard_flags_compat_stats` table: never during an evaluation, at most
+  once per `evaluation_tracking_interval` per process, failed writes
+  included (one `compat_tracking_failed` event per interval, reported once
+  per process). Every successful write refreshes each window's tracking
+  marker (first seen, last flushed), at least once per interval. Operator
+  reads don't count; a forked child drops inherited counts. `flags:stale`
+  says a window can be removed only after 14 days of tracking, a successful
+  write within 2 days, 14 days without hits, and once it has passed on every
+  listed platform; it says "not enough data" or "tracking unhealthy since"
+  otherwise.
+  `Diagnostics.report[:compat]` and the MCP `get_flag` tool (for compat flags
+  with a window) show the counts, `tracking_since` and `last_flushed_at`. Stores gain
+  `record_compat` and `compat_stats` (nil from stores that don't keep them).
+- The migrations generator writes a second, additive migration,
+  `create_standard_flags_compat_stats`. Rerunning it adds only what is
+  missing: a migration is skipped when its file exists or its table already
+  exists in the database (`--no-check-tables` skips that check). The runtime
+  store's readiness doesn't depend on the new table.
+- `conformance/wire/client_status.json` (scope `wire`, suite
+  `client_status`): recognised platforms, registry, header values and today
+  in, the status payload out, for client libraries' upgrade-state parsing.
+  `conformance/upgrade/client_status_server.json` (scope `server`) adds ENV
+  pins and store lookups.
+
 ## [0.3.0] - 2026-11-25
 
 ### Added

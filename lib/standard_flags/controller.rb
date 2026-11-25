@@ -38,6 +38,14 @@ module StandardFlags
   # subclass) takes it over. One raised with `status: 404` answers like
   # `error: :not_found`, with no meta.
   #
+  # `requires_client_version` answers 426 `client_upgrade_required` to a
+  # build below its enforced minimum (see StandardFlags::ClientStatus),
+  # through the same responders, always with a JSON body; a raised
+  # StandardFlags::ClientUpgradeRequired is answered the same way, and as
+  # robustly. It reads `standard_flags_upgrade_client`, as the status
+  # endpoint does, and that is the same client the flag guards use, so
+  # none of them disagree about one request.
+  #
   # Flags are evaluated for `standard_flags_context` plus the calling client,
   # read once per request from the X-Client-Platform, X-Client-Version and
   # X-Client-Build headers (`standard_flags_client`). A context that already
@@ -59,7 +67,22 @@ module StandardFlags
       end
     end
 
+    # What `requires_client_version` (or a raised ClientUpgradeRequired)
+    # hands the responder: `error` is :client_upgrade_required and `status`
+    # 426. `key` is the declared client's name (nil when the request's
+    # version is unknown and `config.require_client_version` refused it),
+    # and `feature` is always nil, so a responder written for Denial can
+    # tell them apart by `error`.
+    UpgradeDenial = Data.define(:key, :error, :status, :feature, :platform, :version, :min_version, :store_url) do
+      def body
+        { errors: [ { status: status.to_s, code: error.to_s, meta: { min_version: min_version, store_url: store_url } } ] }
+      end
+    end
+
     included do
+      if respond_to?(:class_attribute)
+        class_attribute :standard_flags_client_version_options, instance_writer: false, default: nil
+      end
       if respond_to?(:helper_method)
         helper_method :standard_flags_payload, :standard_flags_client, :standard_flags_request_context, :standard_flags_reader
       end
@@ -81,6 +104,46 @@ module StandardFlags
         before_action(**{ only: only, except: except }.compact) do
           standard_flags_require!(key, error: error, status: status, responder: with)
         end
+      end
+
+      # Answers 426 `client_upgrade_required` when the request's client is
+      # below its enforced minimum (StandardFlags::ClientStatus says
+      # `upgrade_required`), through `with:`, `config.controller_responder`
+      # or the default JSON:API body, whose meta carries `min_version` and
+      # `store_url`. A client in its grace window, or below `recommended`
+      # only, passes. So does one whose platform or version is unknown,
+      # unless `config.require_client_version` is true. `group:` picks the
+      # client group (see StandardFlags::ClientApp).
+      #
+      # One guard per controller hierarchy: declaring it again, in the same
+      # class or under a class that inherits one, raises
+      # StandardFlags::ConfigurationError, because the new declaration
+      # would silently replace the earlier one (its actions, group and
+      # responder). Pass `override: true` to replace it on purpose; to
+      # narrow an inherited guard, use `skip_client_version_check`.
+      def requires_client_version(only: nil, except: nil, group: nil, with: nil, override: false)
+        unless with.nil? || with.is_a?(Symbol) || with.respond_to?(:call)
+          raise ArgumentError, "with: must respond to call(controller, denial) or be a Symbol naming a controller method"
+        end
+        raise ArgumentError, "override: must be true or false" unless [ true, false ].include?(override)
+
+        existing = standard_flags_client_version_options
+        if existing && !override
+          where = existing[:owner].equal?(self) ? "already declared here" : "inherited from #{existing[:owner].name || 'a parent'}"
+          raise ConfigurationError,
+            "#{name || 'this controller'} declares requires_client_version again (#{where}); a second declaration would " \
+            "replace the first. Pass override: true to replace it, or use skip_client_version_check to narrow it"
+        end
+
+        self.standard_flags_client_version_options = { group: group&.to_sym, responder: with, owner: self }.freeze
+        before_action :standard_flags_check_client_version, **{ only: only, except: except }.compact
+      end
+
+      # Skips an inherited `requires_client_version` for these actions (all
+      # of them by default): a status or health endpoint under a guarded
+      # base controller, say.
+      def skip_client_version_check(only: nil, except: nil)
+        skip_before_action :standard_flags_check_client_version, raise: false, **{ only: only, except: except }.compact
       end
     end
 
@@ -139,14 +202,19 @@ module StandardFlags
     end
     public :rescue_with_handler, :handler_for_rescue
 
+    STANDARD_FLAGS_HANDLERS = { FeatureDisabled => :standard_flags_feature_disabled,
+                                ClientUpgradeRequired => :standard_flags_client_upgrade_required }.freeze
+    private_constant :STANDARD_FLAGS_HANDLERS
+
     def standard_flags_handler(exception)
-      return unless exception.is_a?(FeatureDisabled)
+      base, handler_name = STANDARD_FLAGS_HANDLERS.find { |klass, _| exception.is_a?(klass) }
+      return unless base
 
       targeted = self.class.rescue_handlers.any? do |name, handler|
-        klass = name.safe_constantize if handler != :standard_flags_feature_disabled
-        klass.is_a?(Class) && klass <= FeatureDisabled
+        klass = name.safe_constantize unless STANDARD_FLAGS_HANDLERS.value?(handler)
+        klass.is_a?(Class) && klass <= base
       end
-      method(:standard_flags_feature_disabled) unless targeted
+      method(handler_name) unless targeted
     end
 
     def standard_flags_require!(key, error:, status:, responder: nil)
@@ -154,6 +222,41 @@ module StandardFlags
 
       standard_flags_deny(Denial.new(key: key.to_sym, error: error, status: status, feature: standard_flags_feature_name(key)),
                           responder)
+    end
+
+    # The client the upgrade checks read (the 426 guard and the status
+    # endpoint), with the precedence the flag guards use: the client
+    # `standard_flags_context` names, whole, when it names one (the app
+    # chose it, from a trusted device record, say), else the X-Client-*
+    # headers' client, whole. Fields are never mixed from the two.
+    def standard_flags_upgrade_client
+      standard_flags_request_context.client
+    end
+
+    def standard_flags_check_client_version
+      options = standard_flags_client_version_options || {}
+      standard_flags_require_client!(group: options[:group], responder: options[:responder])
+    end
+
+    # The 426 guard.
+    def standard_flags_require_client!(group:, responder: nil)
+      result = ClientStatus.for(standard_flags_upgrade_client, group: group)
+      return unless result.upgrade_required? || (result.unknown? && StandardFlags.config.require_client_version)
+
+      standard_flags_deny(standard_flags_upgrade_denial(result.client_app&.name, result.platform, result.version,
+                                                        result.min_version, result.store_url), responder)
+    end
+
+    def standard_flags_client_upgrade_required(exception)
+      return if performed?
+
+      standard_flags_deny(standard_flags_upgrade_denial(exception.client, exception.platform, exception.version,
+                                                        exception.min_version, exception.store_url), nil)
+    end
+
+    def standard_flags_upgrade_denial(client, platform, version, min_version, store_url)
+      UpgradeDenial.new(key: client, error: :client_upgrade_required, status: 426, feature: nil, platform: platform,
+                        version: version&.to_s, min_version: min_version&.to_s, store_url: store_url)
     end
 
     # A 404 answers like `error: :not_found`, revealing no feature name.
@@ -174,8 +277,10 @@ module StandardFlags
       end
     end
 
+    # A 426 always carries its JSON body, whatever the request accepts: the
+    # client needs `min_version` and `store_url` to act on it.
     def standard_flags_render_denial(denial)
-      if request.format.json? || request.content_mime_type&.json?
+      if denial.is_a?(UpgradeDenial) || request.format.json? || request.content_mime_type&.json?
         render json: denial.body, status: denial.status
       else
         head denial.status

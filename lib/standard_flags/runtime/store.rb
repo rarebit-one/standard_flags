@@ -92,6 +92,15 @@ module StandardFlags
     #                                 lock and changes nothing else on the
     #                                 rule; nil when it didn't run (and should
     #                                 be tried again).
+    # * record_compat(stats)        — adds CompatStats (hits since the last
+    #                                 write, the oldest version seen, the last
+    #                                 hit) to standard_flags_compat_stats:
+    #                                 hits add up, the oldest version and the
+    #                                 latest hit win; nil when it didn't run.
+    # * compat_stats(keys)          — the stored CompatStats for those flag
+    #                                 keys (Strings; every key when nil),
+    #                                 ordered by key and platform; nil when
+    #                                 the store doesn't keep them.
     #
     # Operator reads (the MCP tools, the admin page, Restore), outside a
     # write. Each takes `rule:` (a flag key) or `cohort:` (a cohort key):
@@ -150,6 +159,15 @@ module StandardFlags
 
       # nil means "not done": a store that doesn't track evaluations.
       def touch_evaluated(_keys, before:) # rubocop:disable Lint/UnusedMethodArgument
+        nil
+      end
+
+      # nil means "not done": a store that doesn't keep compat stats.
+      def record_compat(_stats)
+        nil
+      end
+
+      def compat_stats(_keys = nil)
         nil
       end
 

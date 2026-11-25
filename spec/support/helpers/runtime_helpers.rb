@@ -20,6 +20,14 @@ module RuntimeHelpers
     flag :beta, owner: "growth", remove_by: "2099-01-01", final: true, unit: :user
   end
 
+  # Compat windows (config.track_compat).
+  COMPAT = proc do
+    unit :account, from: ->(ctx) { ctx.account }
+    compat :legacy_auth, owner: "identity", until_clients: { android: "0.1.12", ios: "2.0" }
+    compat :old_export, owner: "reports"
+    flag :new_checkout, owner: "payments", remove_by: "2099-01-01", final: true
+  end
+
   # Serves fixed rule rows as loaded, bypassing MemoryStore's normalisation,
   # so specs can hold shapes only a hand-written row would have.
   class RawStore < StandardFlags::Runtime::Store

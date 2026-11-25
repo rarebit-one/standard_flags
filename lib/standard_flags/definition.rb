@@ -23,7 +23,7 @@ module StandardFlags
       kill_switch: COMMON_ATTRIBUTES,
       mode: COMMON_ATTRIBUTES + %i[preset values remove_by final permanent bucketing],
       experiment: COMMON_ATTRIBUTES + %i[variants bucketing],
-      compat: COMMON_ATTRIBUTES + %i[remove_by]
+      compat: COMMON_ATTRIBUTES + %i[remove_by until_clients]
     }.freeze
 
     KEY_FORMAT = /\A[a-z][a-z0-9_]*\z/
@@ -45,7 +45,7 @@ module StandardFlags
 
     attr_reader :key, :kind, :owner, :description, :env, :inverted, :forbidden_in,
                 :expose, :exposure, :min_client, :unit, :remove_by, :final, :values, :variants, :permanent,
-                :bucketing, :legacy_parser, :legacy_true
+                :bucketing, :legacy_parser, :legacy_true, :until_clients
 
     def initialize(kind, key, attributes)
       @kind = kind.to_sym
@@ -180,6 +180,12 @@ module StandardFlags
       !client.version.nil? && client.version >= minimum
     end
 
+    # A compat flag's window: `until_clients:` lists, per platform, the first
+    # client version that no longer needs the shim. Empty for other flags.
+    def compat_window?
+      !until_clients.empty?
+    end
+
     # Permanent flags have no remove_by:, so they are never stale.
     def stale?(today = Date.today)
       !remove_by.nil? && remove_by < today
@@ -218,6 +224,7 @@ module StandardFlags
       @exposure = normalize_expose(attributes[:expose])
       @expose = @exposure.transform_values(&:first).freeze
       @min_client = normalize_min_client(attributes[:min_client])
+      @until_clients = normalize_until_clients(attributes[:until_clients])
       @unit = attributes[:unit]&.to_sym
       @remove_by = parse_date(attributes[:remove_by], :remove_by)
       @values = resolve_values(attributes)
@@ -373,6 +380,16 @@ module StandardFlags
       fail!("min_client: can't be used on a kill switch; a kill switch must reach every client") if kill_switch?
 
       Definition.client_versions(min_client) { |message| fail!("min_client: #{message}") }
+    end
+
+    # `{ "platform" => Version }`: a compat flag's window. Its evaluations
+    # are counted (`config.track_compat`) and `flags:stale` reports it once
+    # every listed platform is past its version and it has gone unused.
+    def normalize_until_clients(until_clients)
+      return {}.freeze if until_clients.nil?
+      fail!("until_clients: must be a Hash of platform => version") unless until_clients.is_a?(Hash)
+
+      Definition.client_versions(until_clients) { |message| fail!("until_clients: #{message}") }
     end
 
     # Casts a declared value to this kind's type, raising for anything outside

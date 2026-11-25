@@ -183,7 +183,8 @@ module StandardFlags
           flags: source.keys.zip(source.definitions).to_h,
           tombstones: source.tombstones,
           units: units,
-          env_resolver: -> { source.current_env }
+          env_resolver: -> { source.current_env },
+          clients: source.clients
         )
         @registries = [ source, keyed ].freeze
         keyed

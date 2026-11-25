@@ -83,6 +83,16 @@ module StandardFlags
     # standard_flags_rules.last_evaluated_at for `flags:stale`, and at most
     # how often (seconds) it writes.
     attr_accessor :track_evaluations, :evaluation_tracking_interval
+    # Whether each process counts evaluations of compat flags that declare
+    # `until_clients:` (hits and the oldest client version per platform),
+    # writing them to standard_flags_compat_stats at most every
+    # `evaluation_tracking_interval` seconds. Off by default; needs runtime
+    # rules and the compat stats migration.
+    attr_accessor :track_compat
+    # When true, `requires_client_version` also answers 426 to a request
+    # whose platform or version is unknown. Off by default: an unknown build
+    # is never forced to upgrade.
+    attr_accessor :require_client_version
 
     DEFAULT_CLIENT_HEADERS = { platform: "X-Client-Platform", version: "X-Client-Version", build: "X-Client-Build" }.freeze
     DEFAULT_CLIENT_PLATFORMS = %w[android ios web desktop].freeze
@@ -123,6 +133,8 @@ module StandardFlags
       @membership_retention = 90 * 86_400
       @track_evaluations = true
       @evaluation_tracking_interval = 3_600
+      @track_compat = false
+      @require_client_version = false
       @strict = nil
       @env_source = nil
       @extra_notifiers = []
