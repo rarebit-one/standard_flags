@@ -29,7 +29,8 @@ versions passed outside SemVer).
 | `versions/legacy_ranges.json` | `legacy_ranges` | server | RubyGems range stored by 0.2.x → neutral translation; version → matched (as Gem::Requirement) |
 | `wire/delivery.json` | `delivery` | wire | registry, context, client → OFREP entries and ETag |
 | `wire/client_state.json` | `client_state` | wire | OFREP payloads → what client code reads |
-| `wire/client_status.json` | `client_status` | wire | client registry, X-Client-* header values, today → `/client/status` payload |
+| `wire/client_status.json` | `client_status` | wire | recognised platforms, client registry, X-Client-* header values, today → `/client/status` payload |
+| `upgrade/client_status_server.json` | `client_status` | server | the same, plus ENV pins and store lookups |
 
 ## delivery.json: what the server sends
 
@@ -149,7 +150,8 @@ part of this suite.
 
 ## client_status.json: upgrade status
 
-A server declares the file's `clients` (its client registry), takes the
+A server takes the file's `client_platforms` as the platforms it
+recognises, declares the file's `clients` (its client registry), takes the
 case's `client` as the X-Client-Platform, X-Client-Version and
 X-Client-Build header values, and answers `GET /client/status` for the
 case's `group` (absent: the default group) on `today` (the case's, else the
@@ -162,15 +164,17 @@ The rules:
   `min_version`, `recommended`, `enforce_at` and `store_url`, with null for
   anything absent. Versions are canonical SemVer (`0.4` is sent as
   `0.4.0`; build metadata is dropped). `enforce_at` is a UTC date.
-- **`unknown`.** No platform, a platform the server doesn't recognise
+- **`unknown`.** No platform, a platform outside `client_platforms`
   (`platform` is then null), or no usable version (`version` null). An
   unknown build is never told to upgrade; the body still carries the
   platform's versions and store URL when the platform is known.
 - **The minimum.** A client below `min_version` gets `upgrade_recommended`
   until `enforce_at` (the client's `since` plus `grace_days`) and
   `upgrade_required` from that day on. `enforce_at` is set whenever the
-  version is below the minimum. SemVer precedence applies, so
-  `0.4.0-rc.1` is below `0.4.0`.
+  version is below the minimum. Versions compare by SemVer precedence, with
+  one exception: a prerelease of exactly the minimum (or recommended)
+  release meets it (`0.4.0-rc.1` meets `0.4.0`), while a prerelease of an
+  older release (`0.3.10-beta.1`) is below it.
 - **Recommended.** At or above the minimum but below `recommended` is
   `upgrade_recommended` with no `enforce_at`. Anything else is `ok`.
 - **Store ceiling.** `min_version` and `recommended` are never above the
@@ -178,10 +182,16 @@ The rules:
   the capped values, and the comparison uses them.
 - **Nothing declared.** A recognised platform with no client in the group
   is `ok`, with null versions.
-- **Server-only cases** (`"scope": "server"`) add `env_vars` (the
-  `STANDARD_FLAGS_CLIENT_<NAME>_*` break-glass pins) or `store_lookup`
-  (client name => what a store lookup answers; null means no answer, so
-  `available` applies). Clients skip them.
+- **A status a client doesn't know** (a future one) must be treated as
+  `unknown`: never block on it.
+
+`upgrade/client_status_server.json` (`"scope": "server"`) has the same shape
+and adds what only a server has: `env_vars` (the
+`STANDARD_FLAGS_CLIENT_<NAME>_*` break-glass pins, which beat the code and
+any store lookup; a raised `_MIN_VERSION` needs `_SINCE`) and
+`store_lookup` (client name => the version that client's lookup last
+answered; null means no answer, so `available` applies; a lookup caps only
+its own client). Clients skip it.
 
 ## versions/version_ranges.json
 

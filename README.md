@@ -294,8 +294,10 @@ bin/rails db:migrate
 
 The generator writes two migrations: the runtime-rule tables, and
 `standard_flags_compat_stats` for [compatibility windows](#compatibility-windows).
-Each is skipped when it already exists, so running it again after upgrading
-the gem adds only the new, additive one.
+Each is skipped when its migration file already exists, or when its table
+already exists in the database (an app that squashed or deleted the first
+migration), so running it again after upgrading the gem adds only the new,
+additive one. `--no-check-tables` skips the database check.
 
 ```ruby
 # config/initializers/standard_flags.rb
@@ -1600,7 +1602,9 @@ StandardFlags.define do
   client :android_app, platform: :android, min_version: "0.4.0", since: "2026-12-01",
                        recommended: "0.5.0", available: "0.5.0", grace: 7.days,
                        store_url: "https://play.google.com/store/apps/details?id=com.example.app"
-  client :ios_app, platform: :ios, recommended: "2.1.0", store_url: "https://apps.apple.com/app/id000000000"
+  client :ios_app, platform: :ios, min_version: "2.0.0", since: "2026-12-01", available: "1.9.0",
+                   store_url: "https://apps.apple.com/app/id000000000",
+                   store_lookup: StandardFlags::Stores::AppStore.new(bundle_id: "com.example.app", country: "us")
 end
 ```
 
@@ -1608,27 +1612,30 @@ end
 |-----------|---------|
 | `platform:` | Required. One of `config.client_platforms`. |
 | `min_version:` | The oldest build allowed to keep working. Needs `since:`. |
-| `since:` | The date (`YYYY-MM-DD`, UTC) the minimum was raised. Enforcement starts at `since + grace`. |
+| `since:` | The date (`YYYY-MM-DD`, UTC) the minimum was raised; a Time or DateTime counts as its UTC date. Enforcement starts at `since + grace`. **When you raise `min_version:`, move `since:` to that day**, or the old date enforces the new minimum at once. |
 | `grace:` | Whole days before a raised minimum is enforced: `7.days` (the default), `14` or `0`. |
 | `recommended:` | Builds below it are nudged, never blocked. Must not be below `min_version:`. |
 | `available:` | The newest version known to be in the store (set it when review passes). The store ceiling, below. |
+| `store_lookup:` | This client's live source for `available` (see below). It only ever caps this client. |
 | `store_url:` | Where the client sends the user (an http(s) URL). |
 | `group:` | Lets a second app share a platform. Clients are unique per platform within a group; the status endpoint and the guard pick a group (none by default). |
 
 The registry is checked when it loads: a platform outside
 `config.client_platforms`, a version or date that doesn't parse, a minimum
 without `since:` (or `since:` alone), `recommended:` below `min_version:`, a
-part-day `grace:`, a `store_url:` that isn't http(s), two clients on one
-platform in one group, or a flag whose pin collides with a client's pin all
-raise `StandardFlags::DefinitionError`.
+part-day `grace:`, a `store_url:` that isn't http(s), a `store_lookup:` that
+can't be called, two clients on one platform in one group, or a flag whose
+pin collides with a client's pin all raise `StandardFlags::DefinitionError`.
 
 **Break-glass pins.** `STANDARD_FLAGS_CLIENT_<NAME>_MIN_VERSION`, `_SINCE`,
-`_RECOMMENDED` and `_AVAILABLE` beat the code, as a flag's pin does (for
-`:android_app`, `STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION`). Lower a
-minimum that went out too high, or pin `_SINCE` with a raised one to give
-it a fresh grace window. A value that doesn't parse is ignored, and so is a
-pinned minimum when there is no `since` anywhere. Pins in force and ignored
-pins show in the diagnostics and as health check warnings, by name only.
+`_RECOMMENDED` and `_AVAILABLE` beat the code and any store lookup, as a
+flag's pin beats its default (for `:android_app`,
+`STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION`). Lower a minimum that went
+out too high with `_MIN_VERSION` alone. To raise one, pin `_SINCE` with it:
+a raised `_MIN_VERSION` without `_SINCE` is ignored, so a break-glass raise
+always gets its own grace window. A value that doesn't parse is ignored too.
+Pins in force are listed in the diagnostics (`clients:`), as flags' pins
+are, and never warn; ignored pins are health check warnings, by name only.
 
 ### Grace and the store ceiling
 
@@ -1637,26 +1644,27 @@ date, so every host flips on the same day. Until then, builds below it are
 told `upgrade_recommended` with the date (`enforce_at`).
 
 The enforced minimum is never above the newest version known to be in the
-store: `min(min_version, available)` when `available:` is set, so raising
-the minimum before a release passes review locks nobody out. `recommended`
-is capped the same way, since nudging toward a build nobody can install
-helps no one. For the App Store, a lookup can supply `available` live:
+store, so raising the minimum before a release passes review locks nobody
+out. `recommended` is capped the same way, since nudging toward a build
+nobody can install helps no one. The newest version is a pinned
+`_AVAILABLE` if there is one, else the client's `store_lookup:` answer if
+it has one, else `available:`.
 
-```ruby
-StandardFlags.configure do |config|
-  config.client_store_lookup = StandardFlags::Stores::AppStore.new(bundle_id: "com.example.app", country: "us")
-  # or per client: { ios_app: StandardFlags::Stores::AppStore.new(bundle_id: "com.example.app") }
-end
-```
-
-It asks Apple's public iTunes lookup API at most once an hour per process,
-with a 2-second timeout, and never raises. Until it answers, or when it
-fails (retried after 5 minutes), the declared `available:` applies. A single
-lookup is asked about iOS clients only; a Hash names the client each one
-answers for, and any object with `call(client_app)` returning a version
-works. Google Play has no public API for this (it needs a service account),
-so Android clients use `available:` alone: set it when a release reaches
-production. A store version that isn't SemVer (`2.1.0.4`) reads as unknown.
+A store lookup belongs to the one client that declares it. It is any object
+whose `call(client_app)` answers its last known version (or nil) at once:
+it is asked on request threads, so it must never wait on the network.
+`StandardFlags::Stores::AppStore.new(bundle_id:, country:)` asks Apple's
+public iTunes lookup API in the background: the first call answers nil (so
+`available:` applies) and starts a refresh on a thread, and later calls
+answer the last good version. It refreshes at most once an hour per process.
+After a failure it keeps the last good answer and waits 5 minutes, doubling
+with each further failure up to an hour. Each fetch has one overall 5-second
+deadline (connect, TLS, request and body) and a 256 KiB body cap.
+`refresh!` fetches on the calling thread, for a warm-up at boot. Failures
+emit `store_lookup_failed.standard_flags`; nothing raises. Google Play has
+no public API for this (it needs a service account), so Android clients use
+`available:` alone: set it when a release reaches production. A store
+version that isn't SemVer (`2.1.0.4`) reads as unknown.
 
 ### The status endpoint
 
@@ -1670,9 +1678,13 @@ class ClientStatusController < ActionController::API   # ActionController::Base 
 end
 ```
 
-Route it outside authentication: it reads only the X-Client-* headers,
-never `standard_flags_context`, and reveals nothing about the caller. It is
-a GET, so forgery protection never applies. It answers 200 with:
+Route it outside authentication; it reveals nothing about the caller. It is
+a GET, so forgery protection never applies. It reads the client exactly as
+the [426 guard](#answering-426) does (`standard_flags_upgrade_client`): the
+X-Client-* headers, with any field they don't carry taken from a client your
+`standard_flags_context` names (headers win). So a build the guard refuses is
+always told why here. Keep that context safe to call before sign-in (nil,
+the default, is). It answers 200 with:
 
 ```json
 { "status": "upgrade_recommended", "platform": "android", "version": "0.3.9",
@@ -1688,11 +1700,16 @@ a GET, so forgery protection never applies. It answers 200 with:
 | `ok` | Anything else, including a recognised platform with no client declared. |
 
 Every key is always present (null when absent). Versions are canonical
-SemVer (`0.4` is sent as `0.4.0`). `min_version` and `recommended` are the
+SemVer (`0.4` is sent as `0.4.0`) and compare by SemVer precedence, with one
+exception: a prerelease of exactly the minimum or recommended version meets
+it, so a beta or TestFlight build of the required release (`1.5.0-beta.2`
+against `1.5.0`) isn't locked out. A prerelease of an older version
+(`1.4.9-rc.1`) is still below it. `min_version` and `recommended` are the
 values after the store ceiling. `enforce_at` is set whenever the version is
 below the minimum. The response carries `Cache-Control: max-age=60,
 private` and a Vary on the client headers. With `config.read_client_headers`
-off it can't see the client and answers `unknown`.
+off it can't see the headers. A client that receives a status it doesn't
+know should treat it as `unknown` and never block on it.
 `StandardFlags::ClientStatus.for(client)` gives the same answer in Ruby, for
 a bootstrap response or a device check-in.
 
@@ -1702,12 +1719,17 @@ a bootstrap response or a device check-in.
 class Api::OrdersController < Api::BaseController
   requires_client_version                     # only:/except:, group:, with:
 end
+
+class Api::StatusController < Api::OrdersController
+  skip_client_version_check                   # only:/except:
+end
 ```
 
 A request whose client is `upgrade_required` gets **426**
 `client_upgrade_required` through the same responder chain as
 `requires_flag`: the guard's `with:`, then `config.controller_responder`,
-then a JSON:API body (a bare 426 for other formats):
+then a JSON:API body, sent whatever the request's Accept header says (the
+client needs `min_version` and `store_url` to act on it):
 
 ```json
 {"errors":[{"status":"426","code":"client_upgrade_required","meta":{"min_version":"0.4.0","store_url":"https://…"}}]}
@@ -1719,8 +1741,12 @@ is the client's name, `error` is `:client_upgrade_required`, `status` 426,
 so one responder can tell it from a feature denial by `error`. A build in
 its grace window, or below `recommended` only, passes. So does one whose
 platform or version is unknown, unless `config.require_client_version =
-true`. Client-facing denials stay 4xx (403 and 426): some edges replace an
-app's 5xx body with their own page.
+true`. The guard reads the same client as the status endpoint. Declare it
+once per controller; a subclass turns it off with
+`skip_client_version_check`. Client-facing denials stay 4xx (403 and 426):
+some edges replace an app's 5xx body with their own page. HTTP defines 426
+for protocol upgrades and expects an `Upgrade` header; here it means "upgrade
+the app", with no `Upgrade` header.
 
 App code can raise `StandardFlags::ClientUpgradeRequired.new(status)` (a
 `ClientStatus` result, or keywords). The controller answers it like the
@@ -1739,25 +1765,34 @@ compat :legacy_form_auth, owner: "identity", until_clients: { android: "0.1.12",
 
 With `config.track_compat = true` (off by default; it needs runtime rules and
 the `standard_flags_compat_stats` migration), each evaluation of such a flag
-counts a hit and records the oldest client version seen, per platform
-(`unknown` for a platform the app doesn't recognise, `none` when the
-evaluation carried no client). Counts are held in memory and written behind
-like `last_evaluated_at`: never during an evaluation, at most once per
-`config.evaluation_tracking_interval` per process when a unit of work ends,
-skipped inside a transaction, best-effort (a failed write is reported once
-and the counts are kept). Operator reads (MCP tools, diagnostics) don't
-count. Every evaluation counts, so a shim checked on every request (or in a
-`StandardFlags.snapshot`) never looks idle; evaluate it only on the legacy
-path.
+counts a hit per platform (`unknown` for a platform the app doesn't
+recognise, `none` when the evaluation carried no client). The oldest client
+version seen is recorded only for platforms in `config.client_platforms`.
+Versions come from client headers, which anyone can send, so treat it as a
+hint, not proof; it starts over once a platform has gone unused for 14 days.
 
-`flags:stale` reports a window as removable once it is past on every listed
-platform and the flag has had no hits for 14 days. A platform's window is
-past when every client declared for it enforces a minimum at or above the
-listed version today, or when no build below it has used the flag (no hits
-from that platform, or its oldest version seen is at or above it). Hits
-count from when tracking was turned on, so give it 14 days before trusting
-a "no hits recorded" line. The diagnostics (`compat:`) and the MCP
-`get_flag` tool show the window and the stored counts.
+Counts are held in memory and written behind like `last_evaluated_at`:
+never during an evaluation, and at most once per
+`config.evaluation_tracking_interval` per process when a unit of work ends,
+failed writes included. A failed write is reported once per process, emits
+`compat_tracking_failed.standard_flags` once per interval, and keeps the
+counts for the next try. A write skipped inside a transaction is tried again
+at the next unit of work. The first write that succeeds also records each
+window's tracking marker, which says since when the counts can be trusted.
+A forked child starts with no pending counts. Operator reads (MCP tools,
+diagnostics) don't count. Every evaluation counts, so a shim checked on
+every request (or in a `StandardFlags.snapshot`) never looks idle; evaluate
+it only on the legacy path.
+
+`flags:stale` says a window "can be removed" only when tracking has run for
+at least 14 days, no hit has landed in the last 14 days, and the window has
+passed on every listed platform. A platform's window has passed when every
+client declared for it enforces a minimum at or above the listed version
+today (UTC), or when no build below it has used the flag (no hits from that
+platform, or its oldest version seen is at or above it). Until tracking is
+14 days old it says "not enough data" with the date tracking began. The
+diagnostics (`compat:`, with `tracking_since`) and the MCP `get_flag` tool
+show the window and the stored counts.
 
 ## Rake tasks
 
@@ -1836,9 +1871,9 @@ match no flag, a runtime store that can't be reached (flags keep serving
 through a database blip, so this isn't a failure), a stale runtime snapshot,
 prepared statements being off (see [Privacy](#privacy)), a missing
 `standard_flags_state` row, runtime rules for
-undeclared or tombstoned keys, client registry pins in force or ignored,
-and compat stats that can't be read (or `config.track_compat` without
-runtime rules). standard_health has no
+undeclared or tombstoned keys, client registry pins that were ignored
+(pins in force are listed, not warned about), and compat stats that can't
+be read (or `config.track_compat` without runtime rules). standard_health has no
 warning status, so warnings ride on the row (`warnings:`) and the check stays
 `:ok`; pass `warn_as: :fail` to let them degrade the tier. It is non-critical
 by default. There is no dependency on standard_health unless you reference
@@ -1854,8 +1889,8 @@ age, staleness and each rule's status), and
 `flags:list` gains a `rule` column and a header line with the revision and
 age. With a client registry it adds `clients:` (each client's values in
 force, `enforce_on`, the pins that applied and those ignored; a store lookup
-is never asked here), and with compat windows `compat:` (each window and,
-when tracking, its stored counts). It contains variable names only, never
+is never asked here), and with compat windows `compat:` (each window, when
+its tracking began and, when tracking, its stored counts). It contains variable names only, never
 raw environment values.
 
 ## OpenFeature
@@ -2062,10 +2097,11 @@ unknown and older versions, deprecated wires, errored flags, ETag equality
 across users and clients). `wire/client_state.json` pins what a client does
 with a payload: on, off and not loaded, a missing value meaning the code
 default, ceilings, and payloads refused by size or shape.
-`wire/client_status.json` pins `GET /client/status`: the client registry,
-header values and today's date in, the status payload out (unknown builds,
-grace, enforcement, the store ceiling, groups; ENV pins and store lookups in
-cases marked `server`). None of them needs Ruby to run.
+`wire/client_status.json` pins `GET /client/status`: the recognised
+platforms, the client registry, header values and today's date in, the
+status payload out (unknown builds, grace, enforcement, prereleases, the
+store ceiling, groups). `upgrade/client_status_server.json` (`"scope":
+"server"`) adds ENV pins and store lookups. None of them needs Ruby to run.
 
 ## Bucketing
 

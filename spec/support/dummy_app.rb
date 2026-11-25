@@ -59,6 +59,9 @@ Dummy::Application.routes.draw do
   get "/upgrade/targeted" => "upgrade_targeted#raise_required"
   get "/upgrade/kiosk" => "upgrade_kiosk#index"
   get "/upgrade/context" => "upgrade_context#index"
+  get "/context/client/status" => "context_client_status#client_status"
+  get "/upgrade/skipped/orders" => "upgrade_skipped#orders"
+  get "/upgrade/skipped/health" => "upgrade_skipped#health"
 end
 
 require_relative "dummy_controllers"

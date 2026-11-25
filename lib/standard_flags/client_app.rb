@@ -14,19 +14,25 @@ module StandardFlags
   # * `available:` is the newest version known to be in that store. The
   #   enforced minimum (and the recommended version) is never above it, so a
   #   minimum raised before a release has passed review locks nobody out.
-  #   `config.client_store_lookup` can supply it live (the App Store; see
-  #   StandardFlags::Stores::AppStore), falling back to `available:`.
+  #   `store_lookup:` can supply it live for this client (the App Store; see
+  #   StandardFlags::Stores), falling back to `available:`.
   # * `recommended:` nudges builds below it without blocking them.
   # * `group:` lets two apps share a platform: clients are unique per
   #   (group, platform), and the status endpoint and the 426 guard pick a
   #   group (nil, the default group, unless told otherwise).
   #
-  # ENV break-glass pins beat the code, as with flags:
-  # STANDARD_FLAGS_CLIENT_<NAME>_MIN_VERSION, _SINCE, _RECOMMENDED and
-  # _AVAILABLE. A pin that doesn't parse is ignored (and reported, by name
-  # only), and so is a pinned minimum when there is no `since` to go with it.
+  # Raising `min_version:` means moving `since:` to the day of the raise;
+  # otherwise the old date makes the new minimum enforced at once.
+  #
+  # ENV break-glass pins beat the code and any store lookup, as a flag's
+  # pin does: STANDARD_FLAGS_CLIENT_<NAME>_MIN_VERSION, _SINCE,
+  # _RECOMMENDED and _AVAILABLE. A pin that doesn't parse is ignored (and
+  # reported, by name only). So is a pinned minimum above the code's one
+  # (or on a client with none) without a pinned `_SINCE`: a break-glass
+  # raise can't skip the grace window. Lowering the minimum needs no
+  # `_SINCE`.
   ClientApp = Data.define(:name, :platform, :group, :min_version, :since, :grace_days, :recommended, :available,
-                          :store_url)
+                          :store_url, :store_lookup)
 
   class ClientApp
     # Pin suffix => attribute.
@@ -44,10 +50,17 @@ module StandardFlags
         since && since + app.grace_days
       end
 
-      # The newest version known to be in the store: the lookup's answer
-      # when it gives one, else `available:`.
-      def ceiling(lookup: StandardFlags.config.client_store_lookup)
-        Stores.available(app, lookup) || available
+      # The newest version known to be in the store: a pinned `_AVAILABLE`,
+      # else the client's store lookup's last answer, else `available:`.
+      # Never waits on a store.
+      def ceiling
+        return available if available_pinned?
+
+        Stores.available(app) || available
+      end
+
+      def available_pinned?
+        pinned.include?(app.env_var(:available))
       end
     end
 
@@ -55,7 +68,7 @@ module StandardFlags
       # Builds a ClientApp from a `client` declaration, raising
       # DefinitionError for anything that can't work.
       def declare(name, platform:, min_version: nil, since: nil, recommended: nil, available: nil, store_url: nil,
-                  grace: nil, group: nil)
+                  grace: nil, group: nil, store_lookup: nil)
         name = name.to_s
         fail = ->(message) { raise DefinitionError, "client :#{name} #{message}" }
         fail.call("name must match #{Definition::KEY_FORMAT.inspect}") unless name.match?(Definition::KEY_FORMAT)
@@ -72,12 +85,19 @@ module StandardFlags
           fail.call("recommended: #{versions[:recommended]} is below min_version: #{versions[:min_version]}")
         end
 
+        unless store_lookup.nil? || store_lookup.respond_to?(:call)
+          fail.call("store_lookup: must respond to call(client_app) (StandardFlags::Stores::AppStore, say)")
+        end
+
         new(name: name.to_sym, platform: declared_platform(platform, fail), group: group&.to_sym, **versions,
-            since: since_date, grace_days: grace_days(grace, fail), store_url: declared_url(store_url, fail))
+            since: since_date, grace_days: grace_days(grace, fail), store_url: declared_url(store_url, fail),
+            store_lookup: store_lookup)
       end
 
-      # A YYYY-MM-DD String (or a Date) as a Date, or nil.
+      # A YYYY-MM-DD String, a Date, or a Time or DateTime (as its UTC date)
+      # as a Date, or nil.
       def date(value)
+        return value.to_time.utc.to_date if value.is_a?(DateTime) || value.is_a?(Time)
         return value if value.is_a?(Date)
 
         text = Version.clean(value)
@@ -161,15 +181,12 @@ module StandardFlags
           values[attribute] = value
         end
       end
-      # A minimum needs the date it was raised, or nobody knows when to
-      # enforce it: a pinned minimum with no since anywhere is ignored.
-      if values[:min_version] && values[:since].nil?
-        var = env_var(:min_version)
-        pinned.delete(var)
-        rejected << var
-        values[:min_version] = nil
-      end
+      refuse_unscheduled_minimum(values, pinned, rejected)
       Policy.new(app: self, **values, pinned: pinned.freeze, rejected: rejected.freeze)
+    end
+
+    def store_lookup?
+      !store_lookup.nil?
     end
 
     def inspect
@@ -177,6 +194,19 @@ module StandardFlags
     end
 
     private
+
+    # A pinned minimum above the code's (or on a client with none) needs a
+    # pinned since, so a break-glass raise gets its own grace window
+    # instead of reusing the code's old date.
+    def refuse_unscheduled_minimum(values, pinned, rejected)
+      var = env_var(:min_version)
+      return unless pinned.include?(var) && !pinned.include?(env_var(:since))
+      return if min_version && values[:min_version] <= min_version
+
+      pinned.delete(var)
+      rejected << var
+      values[:min_version] = min_version
+    end
 
     def read(env, var)
       value = env[var]

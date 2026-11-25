@@ -9,6 +9,7 @@ class CreateStandardFlagsCompatStats < ActiveRecord::Migration<%= migration_vers
       t.bigint :hits, null: false, default: 0
       t.string :oldest_version
       t.datetime :last_hit_at
+      t.datetime :first_seen_at, null: false
 
       t.index %i[key platform], unique: true
     end

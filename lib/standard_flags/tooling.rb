@@ -73,13 +73,15 @@ module StandardFlags
     # tombstoned keys; and memberships past `config.membership_retention`
     # that `flags:purge` would delete.
     #
-    # With `config.track_compat` on, it lists compat flags whose window has
-    # passed on every platform `until_clients:` names and that have had no
-    # hits for 14 days. A platform's window has passed when every client
-    # declared for it enforces a minimum at or above the listed version
-    # today, or when no client below that version has used the flag (no
-    # hits from the platform at all, or its oldest version seen is at or
-    # above it).
+    # With `config.track_compat` on, it says a compat window "can be
+    # removed" only when tracking has run for at least 14 days (the flag's
+    # tracking marker, written by the first successful write), no hit has
+    # landed in the last 14 days, and the window has passed on every
+    # platform `until_clients:` names. A platform's window has passed when
+    # every client declared for it enforces a minimum at or above the listed
+    # version today (UTC), or when no client below that version has used
+    # the flag (no hits from the platform, or its oldest version seen is at
+    # or above it). Until tracking is old enough it says "not enough data".
     class Stale
       SETTLED_AFTER = 30 * 86_400
       UNUSED_AFTER = 14 * 86_400
@@ -157,12 +159,19 @@ module StandardFlags
       end
 
       def compat_finding(definition, stats)
+        marker, stats = stats.partition(&:marker?)
+        since = marker.first&.first_seen_at
+        if since.nil? || since > @now - Runtime::CompatTracker::IDLE
+          tracking = since ? "tracking since #{day(since)}" : "no tracking recorded yet"
+          return "compat #{definition.key}: not enough data to judge its window (#{tracking}; needs 14 days)"
+        end
+
         last = stats.filter_map(&:last_hit_at).max
-        return if last && last > @now - UNUSED_AFTER
+        return if last && last > @now - Runtime::CompatTracker::IDLE
         return unless definition.until_clients.all? { |platform, cutoff| window_passed?(platform, cutoff, stats) }
 
         windows = definition.until_clients.map { |platform, cutoff| "#{platform} #{cutoff}" }.join(", ")
-        seen = last ? "no hits since #{day(last)}" : "no hits recorded"
+        seen = last ? "no hits since #{day(last)}" : "no hits since tracking began on #{day(since)}"
         "compat #{definition.key} (owner: #{definition.owner}) is past its window on every platform (#{windows}) " \
           "and has had #{seen}; it can be removed"
       end
@@ -180,7 +189,7 @@ module StandardFlags
 
       def enforced_at_least?(app, cutoff)
         policy = app.resolve
-        return false if policy.min_version.nil? || @today < policy.enforce_on
+        return false if policy.min_version.nil? || @now.utc.to_date < policy.enforce_on
 
         ceiling = policy.ceiling
         minimum = ceiling ? [ policy.min_version, ceiling ].min : policy.min_version

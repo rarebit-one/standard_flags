@@ -40,8 +40,10 @@ module StandardFlags
   #
   # `requires_client_version` answers 426 `client_upgrade_required` to a
   # build below its enforced minimum (see StandardFlags::ClientStatus),
-  # through the same responders; a raised StandardFlags::ClientUpgradeRequired
-  # is answered the same way, and as robustly.
+  # through the same responders, always with a JSON body; a raised
+  # StandardFlags::ClientUpgradeRequired is answered the same way, and as
+  # robustly. It reads `standard_flags_upgrade_client`, as the status
+  # endpoint does, so the two never disagree about one request.
   #
   # Flags are evaluated for `standard_flags_context` plus the calling client,
   # read once per request from the X-Client-Platform, X-Client-Version and
@@ -77,6 +79,9 @@ module StandardFlags
     end
 
     included do
+      if respond_to?(:class_attribute)
+        class_attribute :standard_flags_client_version_options, instance_writer: false, default: nil
+      end
       if respond_to?(:helper_method)
         helper_method :standard_flags_payload, :standard_flags_client, :standard_flags_request_context, :standard_flags_reader
       end
@@ -107,15 +112,23 @@ module StandardFlags
       # `store_url`. A client in its grace window, or below `recommended`
       # only, passes. So does one whose platform or version is unknown,
       # unless `config.require_client_version` is true. `group:` picks the
-      # client group (see StandardFlags::ClientApp).
+      # client group (see StandardFlags::ClientApp). One declaration per
+      # controller (a later one replaces its group and responder); a
+      # subclass can turn it off with `skip_client_version_check`.
       def requires_client_version(only: nil, except: nil, group: nil, with: nil)
         unless with.nil? || with.is_a?(Symbol) || with.respond_to?(:call)
           raise ArgumentError, "with: must respond to call(controller, denial) or be a Symbol naming a controller method"
         end
 
-        before_action(**{ only: only, except: except }.compact) do
-          standard_flags_require_client!(group: group&.to_sym, responder: with)
-        end
+        self.standard_flags_client_version_options = { group: group&.to_sym, responder: with }.freeze
+        before_action :standard_flags_check_client_version, **{ only: only, except: except }.compact
+      end
+
+      # Skips an inherited `requires_client_version` for these actions (all
+      # of them by default): a status or health endpoint under a guarded
+      # base controller, say.
+      def skip_client_version_check(only: nil, except: nil)
+        skip_before_action :standard_flags_check_client_version, raise: false, **{ only: only, except: except }.compact
       end
     end
 
@@ -196,9 +209,27 @@ module StandardFlags
                           responder)
     end
 
-    # The 426 guard. A Hash context client counts, as for flags.
+    # The client the upgrade checks read (the 426 guard and the status
+    # endpoint): the X-Client-* headers, with any field they don't carry
+    # taken from the client `standard_flags_context` names. Headers win, as
+    # on the OFREP endpoint.
+    def standard_flags_upgrade_client
+      headers = standard_flags_client
+      context = Context.wrap(standard_flags_context).client
+      return headers if context.empty?
+      return context if headers.empty?
+
+      Client.new(**context.to_h.merge(headers.to_h))
+    end
+
+    def standard_flags_check_client_version
+      options = standard_flags_client_version_options || {}
+      standard_flags_require_client!(group: options[:group], responder: options[:responder])
+    end
+
+    # The 426 guard.
     def standard_flags_require_client!(group:, responder: nil)
-      result = ClientStatus.for(standard_flags_request_context.client, group: group)
+      result = ClientStatus.for(standard_flags_upgrade_client, group: group)
       return unless result.upgrade_required? || (result.unknown? && StandardFlags.config.require_client_version)
 
       standard_flags_deny(standard_flags_upgrade_denial(result.client_app&.name, result.platform, result.version,
@@ -235,8 +266,10 @@ module StandardFlags
       end
     end
 
+    # A 426 always carries its JSON body, whatever the request accepts: the
+    # client needs `min_version` and `store_url` to act on it.
     def standard_flags_render_denial(denial)
-      if request.format.json? || request.content_mime_type&.json?
+      if denial.is_a?(UpgradeDenial) || request.format.json? || request.content_mime_type&.json?
         render json: denial.body, status: denial.status
       else
         head denial.status

@@ -3,35 +3,33 @@ module StandardFlags
   # store ceiling (see StandardFlags::ClientApp): never enforce a minimum
   # that the store can't yet deliver.
   #
-  #   config.client_store_lookup = StandardFlags::Stores::AppStore.new(bundle_id: "com.example.app", country: "us")
-  #   # or, per client:
-  #   config.client_store_lookup = { ios_app: StandardFlags::Stores::AppStore.new(bundle_id: "com.example.app") }
+  #   client :ios_app, platform: :ios, min_version: "2.0.0", since: "2026-12-01", available: "1.9.0",
+  #                    store_lookup: StandardFlags::Stores::AppStore.new(bundle_id: "com.example.app", country: "us")
   #
-  # A lookup is any object that responds to `call(client_app)` and returns
-  # a version String (or a StandardFlags::Version), or nil when it doesn't
-  # know. A single lookup is asked about iOS clients only; a Hash names the
-  # client each lookup answers for. When it fails, returns nil or raises,
-  # the declared `available:` applies. Google Play has no public API for
-  # this, so Android clients use `available:` alone.
+  # A lookup belongs to the one client that declares it, and only ever caps
+  # that client. It is any object that responds to `call(client_app)` with
+  # its last known version (a String or a StandardFlags::Version), or nil,
+  # and returns at once: it is asked on request threads, so it must never
+  # wait on the network (AppStore refreshes in the background). When it
+  # answers nil, nonsense or raises, the declared `available:` applies; a
+  # pinned `_AVAILABLE` beats it. Failures emit
+  # `store_lookup_failed.standard_flags` with `store`, `client` and
+  # `reason`. Google Play has no public API for this,
+  # so Android clients use `available:` alone.
   module Stores
     autoload :AppStore, "standard_flags/stores/app_store"
 
     module_function
 
-    # The version `lookup` reports for `app`, or nil. Never raises.
-    def available(app, lookup)
-      adapter =
-        case lookup
-        when nil then nil
-        when Hash then lookup[app.name] || lookup[app.name.to_s]
-        else lookup if app.platform == "ios"
-        end
-      return nil unless adapter
+    # The version `app`'s store lookup last reported, or nil. Never raises.
+    def available(app)
+      lookup = app.store_lookup
+      return nil unless lookup
 
-      Version.parse(adapter.call(app))
+      Version.parse(lookup.call(app))
     rescue StandardError => e
       Reporting.once(:store_lookup, app.name, e.class.name) do
-        Reporting.instrument(:store_lookup_failed, client: app.name, error_class: e.class.name)
+        Reporting.instrument(:store_lookup_failed, store: lookup.class.name, client: app.name, reason: e.class.name)
       end
       nil
     end

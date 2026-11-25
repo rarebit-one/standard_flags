@@ -52,7 +52,7 @@ RSpec.describe StandardFlags::Controller, ".requires_client_version" do
       end
     end
 
-    it "is pre-auth: it never asks who is signed in, and works with forgery protection on" do
+    it "works with forgery protection on (a GET)" do
       ActionController::Base.allow_forgery_protection = true
       get "/client/status", {}, client("android", "0.5.0")
       expect(json["status"]).to eq("ok")
@@ -103,9 +103,12 @@ RSpec.describe StandardFlags::Controller, ".requires_client_version" do
                                          "meta" => { "min_version" => "0.4.0", "store_url" => "https://example.com/store/android" } } ])
     end
 
-    it "answers a bare 426 to other formats" do
-      get "/upgrade/orders", {}, client("android", "0.3.9")
-      expect([ last_response.status, last_response.body ]).to eq([ 426, "" ])
+    it "always sends the JSON body with a 426, whatever the request accepts" do
+      [ {}, { "HTTP_ACCEPT" => "*/*" }, { "HTTP_ACCEPT" => "text/html" } ].each do |accept|
+        get "/upgrade/orders", {}, client("android", "0.3.9").merge(accept)
+        expect([ last_response.status, last_response.media_type ]).to eq([ 426, "application/json" ]), accept.inspect
+        expect(json.dig("errors", 0, "meta", "min_version")).to eq("0.4.0")
+      end
     end
 
     it "passes a client at the minimum, in its grace window, below recommended only, or on an undeclared platform" do
@@ -168,9 +171,32 @@ RSpec.describe StandardFlags::Controller, ".requires_client_version" do
       expect(last_response.status).to eq(200)
     end
 
-    it "uses a client the app's context names" do
-      get "/upgrade/context", {}, client("android", "9.9.9")
+    it "uses a client the app's context names, with the headers winning field by field" do
+      get "/upgrade/context"
       expect(last_response.status).to eq(426)
+      get "/upgrade/context", {}, client("android", "9.9.9")
+      expect(last_response.status).to eq(200)
+      get "/upgrade/context", {}, { "HTTP_X_CLIENT_VERSION" => "0.5.0" }
+      expect(last_response.status).to eq(200)
+    end
+
+    it "agrees with GET /client/status about every request" do
+      requests = [ {}, client("android", "9.9.9"), client("android", "0.3.0"), { "HTTP_X_CLIENT_VERSION" => "0.4.0" },
+                   client("ios", "1.0.0"), client("palm") ]
+      requests.each do |headers|
+        get "/context/client/status", {}, headers
+        status = json["status"]
+        get "/upgrade/context", {}, headers
+        expect(last_response.status == 426).to eq(status == "upgrade_required"), "#{headers.inspect}: #{status}"
+      end
+    end
+
+    it "can be skipped by a subclass with skip_client_version_check" do
+      get "/upgrade/skipped/orders", {}, client("android", "0.1.0")
+      expect([ last_response.status, last_response.body ]).to eq([ 200, "orders" ])
+      get "/upgrade/orders", {}, client("android", "0.1.0")
+      expect(last_response.status).to eq(426)
+      expect(UpgradeSkippedController.standard_flags_client_version_options).to eq(group: nil, responder: nil)
     end
 
     it "refuses a with: that can't answer" do

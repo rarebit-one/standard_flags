@@ -81,6 +81,17 @@ RSpec.describe StandardFlags::ClientApp do
     end
   end
 
+  it "takes a Time or DateTime since: as its UTC date, so enforce_at stays a date" do
+    registry = define_clients do
+      client :a, platform: :android, min_version: "1.0.0", since: DateTime.new(2026, 12, 1, 23, 0, 0, "-05:00"), grace: 0
+      client :b, platform: :ios, min_version: "1.0.0", since: Time.utc(2026, 12, 1, 18), grace: 0
+    end
+    expect(registry.clients.values.map(&:since)).to eq([ Date.new(2026, 12, 2), Date.new(2026, 12, 1) ])
+    expect(registry.clients.values.map { |app| app.since.class }).to eq([ Date, Date ])
+    result = StandardFlags::ClientStatus.for({ platform: "android", version: "0.9.0" }, today: Date.new(2026, 12, 2))
+    expect(result.to_h["enforce_at"]).to eq("2026-12-02")
+  end
+
   it "accepts a Date for since and a version with a prerelease" do
     registry = define_clients { client :android_app, platform: :android, min_version: "1.0.0-rc.1", since: Date.new(2026, 12, 1) }
     expect(registry.clients[:android_app]).to have_attributes(since: Date.new(2026, 12, 1), min_version: StandardFlags::Version.parse("1.0.0-rc.1"))
@@ -141,6 +152,18 @@ RSpec.describe StandardFlags::ClientApp do
       expect([ policy.min_version, policy.recommended, policy.available ].map(&:to_s)).to eq(%w[0.4.2 0.6.0 0.6.0])
       expect([ policy.since, policy.enforce_on ]).to eq([ Date.new(2026, 12, 4), Date.new(2026, 12, 11) ])
       expect(policy.pinned).to eq(app.env_vars)
+    end
+
+    it "refuses a raised minimum without a pinned _SINCE, so a break-glass raise can't skip the grace window" do
+      policy = app.resolve(pins(min_version: "0.4.5"))
+      expect(policy).to have_attributes(min_version: app.min_version, pinned: [], rejected: [ "STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION" ])
+      policy = app.resolve(pins(min_version: "0.4.5", since: "soon"))
+      expect(policy.rejected).to eq(%w[STANDARD_FLAGS_CLIENT_ANDROID_APP_SINCE STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION])
+    end
+
+    it "takes a lowered (or equal) minimum without _SINCE: it can only relax enforcement" do
+      expect(app.resolve(pins(min_version: "0.3.0")).min_version.to_s).to eq("0.3.0")
+      expect(app.resolve(pins(min_version: "0.4.0")).pinned).to eq([ "STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION" ])
     end
 
     it "ignores blank pins and rejects ones that don't parse" do

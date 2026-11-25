@@ -1363,6 +1363,7 @@
       ],
       "properties": {
         "status": {
+          "description": "A client that receives a status it doesn't know treats it as unknown: it never blocks on it.",
           "enum": [
             "ok",
             "upgrade_recommended",
@@ -1455,12 +1456,21 @@
     "client_status_suite": {
       "required": [
         "today",
+        "client_platforms",
         "clients",
         "cases"
       ],
       "properties": {
         "today": {
           "$ref": "#/$defs/date"
+        },
+        "client_platforms": {
+          "description": "The platforms the server recognises (config.client_platforms); any other platform header is unknown.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
         },
         "clients": {
           "type": "array",

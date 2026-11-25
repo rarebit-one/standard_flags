@@ -1,0 +1,277 @@
+{
+  "description": "Server-only GET /client/status cases: the STANDARD_FLAGS_CLIENT_<NAME>_* break-glass ENV pins (`env_vars`) and per-client store lookups (`store_lookup`: client name => the version that client's lookup last answered; null means no answer). Same shape as wire/client_status.json.",
+  "suite": "client_status",
+  "scope": "server",
+  "client_platforms": [
+    "android",
+    "ios",
+    "web",
+    "desktop"
+  ],
+  "today": "2026-12-03",
+  "clients": [
+    {
+      "name": "android_app",
+      "platform": "android",
+      "min_version": "0.4.0",
+      "since": "2026-12-01",
+      "grace_days": 7,
+      "recommended": "0.5.0",
+      "available": "0.5.0",
+      "store_url": "https://example.com/store/android"
+    },
+    {
+      "name": "ios_app",
+      "platform": "ios",
+      "min_version": "2.0.0",
+      "since": "2026-11-01",
+      "grace_days": 7,
+      "recommended": "2.1.0",
+      "available": "1.9.0",
+      "store_url": "https://example.com/store/ios"
+    },
+    {
+      "name": "desktop_app",
+      "platform": "desktop",
+      "recommended": "3.0.0"
+    },
+    {
+      "name": "kiosk_android",
+      "platform": "android",
+      "group": "kiosk",
+      "min_version": "1.2.0",
+      "since": "2026-12-03",
+      "grace_days": 0
+    },
+    {
+      "name": "driver_ios",
+      "platform": "ios",
+      "group": "driver",
+      "min_version": "1.5.0",
+      "since": "2026-01-01",
+      "grace_days": 7,
+      "available": "1.4.0"
+    }
+  ],
+  "cases": [
+    {
+      "name": "ENV pin: a lowered minimum (break-glass) beats the code",
+      "client": {
+        "platform": "android",
+        "version": "0.3.9"
+      },
+      "today": "2026-12-08",
+      "env_vars": {
+        "STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION": "0.3.0"
+      },
+      "expected": {
+        "status": "upgrade_recommended",
+        "platform": "android",
+        "version": "0.3.9",
+        "min_version": "0.3.0",
+        "recommended": "0.5.0",
+        "enforce_at": null,
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "ENV pin: a raised minimum without _SINCE is ignored, so it can't skip a grace window",
+      "client": {
+        "platform": "android",
+        "version": "0.4.2"
+      },
+      "today": "2026-12-08",
+      "env_vars": {
+        "STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION": "0.4.5"
+      },
+      "expected": {
+        "status": "upgrade_recommended",
+        "platform": "android",
+        "version": "0.4.2",
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": null,
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "ENV pin: a raised minimum with _SINCE gets its own grace window",
+      "client": {
+        "platform": "android",
+        "version": "0.4.2"
+      },
+      "today": "2026-12-08",
+      "env_vars": {
+        "STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION": "0.4.5",
+        "STANDARD_FLAGS_CLIENT_ANDROID_APP_SINCE": "2026-12-08"
+      },
+      "expected": {
+        "status": "upgrade_recommended",
+        "platform": "android",
+        "version": "0.4.2",
+        "min_version": "0.4.5",
+        "recommended": "0.5.0",
+        "enforce_at": "2026-12-15",
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "ENV pin: a new since restarts the grace window",
+      "client": {
+        "platform": "android",
+        "version": "0.3.9"
+      },
+      "today": "2026-12-08",
+      "env_vars": {
+        "STANDARD_FLAGS_CLIENT_ANDROID_APP_SINCE": "2026-12-05"
+      },
+      "expected": {
+        "status": "upgrade_recommended",
+        "platform": "android",
+        "version": "0.3.9",
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": "2026-12-12",
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "ENV pin: a value that doesn't parse is ignored",
+      "client": {
+        "platform": "android",
+        "version": "0.3.9"
+      },
+      "today": "2026-12-08",
+      "env_vars": {
+        "STANDARD_FLAGS_CLIENT_ANDROID_APP_MIN_VERSION": "latest"
+      },
+      "expected": {
+        "status": "upgrade_required",
+        "platform": "android",
+        "version": "0.3.9",
+        "min_version": "0.4.0",
+        "recommended": "0.5.0",
+        "enforce_at": "2026-12-08",
+        "store_url": "https://example.com/store/android"
+      }
+    },
+    {
+      "name": "ENV pin: a minimum on a client without one needs a pinned _SINCE",
+      "client": {
+        "platform": "desktop",
+        "version": "1.0.0"
+      },
+      "env_vars": {
+        "STANDARD_FLAGS_CLIENT_DESKTOP_APP_MIN_VERSION": "2.0.0"
+      },
+      "expected": {
+        "status": "upgrade_recommended",
+        "platform": "desktop",
+        "version": "1.0.0",
+        "min_version": null,
+        "recommended": "3.0.0",
+        "enforce_at": null,
+        "store_url": null
+      }
+    },
+    {
+      "name": "ENV pin: available raises the store ceiling",
+      "client": {
+        "platform": "ios",
+        "version": "1.9.0"
+      },
+      "env_vars": {
+        "STANDARD_FLAGS_CLIENT_IOS_APP_AVAILABLE": "2.1.0"
+      },
+      "expected": {
+        "status": "upgrade_required",
+        "platform": "ios",
+        "version": "1.9.0",
+        "min_version": "2.0.0",
+        "recommended": "2.1.0",
+        "enforce_at": "2026-11-08",
+        "store_url": "https://example.com/store/ios"
+      }
+    },
+    {
+      "name": "store lookup: its answer replaces the declared available",
+      "client": {
+        "platform": "ios",
+        "version": "1.9.5"
+      },
+      "store_lookup": {
+        "ios_app": "2.0.0"
+      },
+      "expected": {
+        "status": "upgrade_required",
+        "platform": "ios",
+        "version": "1.9.5",
+        "min_version": "2.0.0",
+        "recommended": "2.0.0",
+        "enforce_at": "2026-11-08",
+        "store_url": "https://example.com/store/ios"
+      }
+    },
+    {
+      "name": "store lookup: no answer falls back to the declared available",
+      "client": {
+        "platform": "ios",
+        "version": "1.9.5"
+      },
+      "store_lookup": {
+        "ios_app": null
+      },
+      "expected": {
+        "status": "ok",
+        "platform": "ios",
+        "version": "1.9.5",
+        "min_version": "1.9.0",
+        "recommended": "1.9.0",
+        "enforce_at": null,
+        "store_url": "https://example.com/store/ios"
+      }
+    },
+    {
+      "name": "ENV pin: _AVAILABLE beats a store lookup's answer",
+      "client": {
+        "platform": "ios",
+        "version": "1.9.5"
+      },
+      "env_vars": {
+        "STANDARD_FLAGS_CLIENT_IOS_APP_AVAILABLE": "1.9.0"
+      },
+      "store_lookup": {
+        "ios_app": "2.1.0"
+      },
+      "expected": {
+        "status": "ok",
+        "platform": "ios",
+        "version": "1.9.5",
+        "min_version": "1.9.0",
+        "recommended": "1.9.0",
+        "enforce_at": null,
+        "store_url": "https://example.com/store/ios"
+      }
+    },
+    {
+      "name": "store lookup: a lookup caps only the client that declares it",
+      "client": {
+        "platform": "ios",
+        "version": "1.4.0"
+      },
+      "group": "driver",
+      "store_lookup": {
+        "ios_app": "3.0.0"
+      },
+      "expected": {
+        "status": "ok",
+        "platform": "ios",
+        "version": "1.4.0",
+        "min_version": "1.4.0",
+        "recommended": null,
+        "enforce_at": null,
+        "store_url": null
+      }
+    }
+  ]
+}

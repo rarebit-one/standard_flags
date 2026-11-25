@@ -11,6 +11,8 @@ RSpec.describe StandardFlags::Generators::MigrationsGenerator, type: :generator 
   before do
     FileUtils.rm_rf(destination_root)
     FileUtils.mkdir_p(File.join(destination_root, "config/initializers"))
+    # The Postgres run has the tables; these examples are about files.
+    allow(described_class).to receive(:table_present?).and_return(false)
   end
 
   after { FileUtils.rm_rf(destination_root) }
@@ -78,6 +80,7 @@ RSpec.describe StandardFlags::Generators::MigrationsGenerator, type: :generator 
       expect(content).to include("class CreateStandardFlagsCompatStats < ActiveRecord::Migration[#{ActiveRecord::VERSION::MAJOR}.#{ActiveRecord::VERSION::MINOR}]")
       expect(content.scan(/create_table :(\w+)/).flatten).to eq(%w[standard_flags_compat_stats])
       expect(content).to include("t.index %i[key platform], unique: true")
+      expect(content).to include("t.datetime :first_seen_at, null: false")
       expect(content).not_to include("id: :uuid")
     end
 
@@ -94,6 +97,26 @@ RSpec.describe StandardFlags::Generators::MigrationsGenerator, type: :generator 
     it "uses UUID keys when the app generates them" do
       with_primary_key_type(:uuid) { quietly { described_class.start([], destination_root: destination_root) } }
       expect(File.read(compat_migrations.first)).to include("create_table :standard_flags_compat_stats, id: :uuid do |t|")
+    end
+
+    it "skips a migration whose table already exists, as for an app that squashed the first one" do
+      allow(described_class).to receive(:table_present?) { |table| table == "standard_flags_rules" }
+      output = quietly { described_class.start([], destination_root: destination_root) }
+      expect(output).to include("standard_flags_rules already exists in the database, skipping create_standard_flags_tables")
+      expect([ migrations.size, compat_migrations.size ]).to eq([ 0, 1 ])
+    end
+
+    it "writes nothing on a rerun once both tables exist, unless told not to check" do
+      allow(described_class).to receive(:table_present?).and_return(true)
+      quietly { described_class.start([], destination_root: destination_root) }
+      expect([ migrations.size, compat_migrations.size ]).to eq([ 0, 0 ])
+      quietly { described_class.start([ "--no-check-tables" ], destination_root: destination_root) }
+      expect([ migrations.size, compat_migrations.size ]).to eq([ 1, 1 ])
+    end
+
+    it "asks the database, and answers false without one" do
+      expect(described_class).to receive(:table_present?).and_call_original
+      expect(described_class.table_present?("standard_flags_nope")).to be(false)
     end
   end
 

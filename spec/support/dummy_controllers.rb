@@ -251,12 +251,6 @@ class ClientStatusController < DummyBaseController
   include StandardFlags::ClientStatus::Controller
 
   standard_flags_client_status
-
-  private
-
-  def standard_flags_context
-    raise "the client status endpoint must not ask who is signed in"
-  end
 end
 
 class ClientStatusApiController < ActionController::API
@@ -314,19 +308,36 @@ class UpgradeKioskController < DummyBaseController
   end
 end
 
-# The app's context names a client, which wins over the headers.
-class UpgradeContextController < DummyBaseController
-  requires_client_version
-
-  def index
-    render plain: "context"
-  end
-
+# The app's context names a client; headers win field by field, for the
+# guard and the status endpoint alike.
+module DummyContextClient
   private
 
   def standard_flags_context
     StandardFlags::Context.new(client: { platform: "android", version: "0.1.0" })
   end
+end
+
+class UpgradeContextController < DummyBaseController
+  include DummyContextClient
+
+  requires_client_version
+
+  def index
+    render plain: "context"
+  end
+end
+
+class ContextClientStatusController < DummyBaseController
+  include DummyContextClient
+  include StandardFlags::ClientStatus::Controller
+
+  standard_flags_client_status
+end
+
+# A subclass turning an inherited guard off for one action.
+class UpgradeSkippedController < UpgradeController
+  skip_client_version_check only: :orders
 end
 
 class UpgradeRaiseController < DummyBaseController

@@ -117,7 +117,9 @@ module StandardFlags
         return unless enabled?
 
         @tracker&.flush(store, now)
-        @compat_tracker&.flush(store, now)
+        # With tracking on, the tracker flushes even before any hit, so each
+        # compat flag's tracking marker is written.
+        compat_tracker.flush(store, now) if StandardFlags.config.track_compat
       rescue StandardError
         nil
       end

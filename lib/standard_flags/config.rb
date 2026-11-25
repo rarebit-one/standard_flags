@@ -89,11 +89,6 @@ module StandardFlags
     # `evaluation_tracking_interval` seconds. Off by default; needs runtime
     # rules and the compat stats migration.
     attr_accessor :track_compat
-    # The client registry's store ceiling: a lookup (`call(client_app)` =>
-    # version) asked about iOS clients, or a Hash of client name => lookup.
-    # nil uses each client's declared `available:` alone. See
-    # StandardFlags::Stores.
-    attr_accessor :client_store_lookup
     # When true, `requires_client_version` also answers 426 to a request
     # whose platform or version is unknown. Off by default: an unknown build
     # is never forced to upgrade.
@@ -139,7 +134,6 @@ module StandardFlags
       @track_evaluations = true
       @evaluation_tracking_interval = 3_600
       @track_compat = false
-      @client_store_lookup = nil
       @require_client_version = false
       @strict = nil
       @env_source = nil

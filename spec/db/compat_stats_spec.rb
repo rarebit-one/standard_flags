@@ -47,14 +47,52 @@ RSpec.describe "compat stats on Postgres", :db, registry: RuntimeHelpers::COMPAT
     expect(models::CompatStat.count).to eq(0)
   end
 
-  it "raises a StoreError naming only the class when the table is missing" do
+  def without_compat_table
     ActiveRecord::Base.connection.rename_table(:standard_flags_compat_stats, :standard_flags_compat_stats_away)
-    expect { store.record_compat([ stat("android", 1, "0.1.0", at) ]) }
-      .to raise_error(StandardFlags::Runtime::StoreError, /\Acompat tracking failed: [A-Za-z:]+\z/)
-    expect { store.compat_stats }.to raise_error(StandardFlags::Runtime::StoreError, /compat stats failed/)
-    expect(StandardFlags::Runtime.store).to be_ready
+    models::CompatStat.reset_column_information
+    yield
   ensure
     ActiveRecord::Base.connection.rename_table(:standard_flags_compat_stats_away, :standard_flags_compat_stats)
+    models::CompatStat.reset_column_information
+  end
+
+  it "says the table is missing, and how to add it, when the migration hasn't run" do
+    without_compat_table do
+      expect { store.record_compat([ stat("android", 1, "0.1.0", at) ]) }.to raise_error(
+        an_instance_of(StandardFlags::Runtime::StoreError)
+          .and(having_attributes(message: "compat tracking failed: standard_flags_compat_stats is missing; run bin/rails g " \
+                                          "standard_flags:migrations and migrate", cause_class: "StandardFlags::MissingCompatTable"))
+      )
+      expect { store.compat_stats }.to raise_error(StandardFlags::Runtime::StoreError, /compat stats failed/)
+      expect(StandardFlags::Runtime.store).to be_ready
+    end
+  end
+
+  it "tries at most once per interval while the table is missing" do
+    events = []
+    subscriber = ActiveSupport::Notifications.subscribe("compat_tracking_failed.standard_flags") { |*, payload| events << payload }
+    StandardFlags.config.evaluation_tracking_interval = 3600
+    without_compat_table do
+      10.times do
+        Rails.application.executor.wrap do
+          StandardFlags.evaluate(:legacy_auth, for: StandardFlags::Context.new(client: { platform: "android", version: "0.1.0" }))
+        end
+        time[0] += 1
+      end
+    end
+    expect(events).to eq([ { error_class: "StandardFlags::MissingCompatTable" } ])
+    expect(StandardFlags::Runtime.compat_tracker.pending.first.hits).to eq(10)
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscriber)
+  end
+
+  it "keeps first_seen_at, and lets the oldest version start over after 14 idle days" do
+    store.record_compat([ stat("android", 1, "0.0.0", at) ])
+    first = models::CompatStat.pick(:first_seen_at)
+    store.record_compat([ stat("android", 1, "0.1.5", at + (13 * 86_400)) ])
+    expect(store.compat_stats.first.oldest_version).to eq("0.0.0")
+    store.record_compat([ stat("android", 1, "0.2.0", at + (28 * 86_400)) ])
+    expect(store.compat_stats.first).to have_attributes(oldest_version: "0.2.0", hits: 3, first_seen_at: first)
   end
 
   it "counts evaluations end to end, through the executor hook" do
@@ -63,7 +101,8 @@ RSpec.describe "compat stats on Postgres", :db, registry: RuntimeHelpers::COMPAT
       StandardFlags.evaluate(:legacy_auth, for: StandardFlags::Context.new(client: { platform: "android", version: "0.1.3" }))
       StandardFlags.evaluate(:legacy_auth, for: StandardFlags::Context.new(client: { platform: "android", version: "0.1.1" }))
     end
-    expect(store.compat_stats.map { |row| [ row.platform, row.hits, row.oldest_version ] }).to eq([ [ "android", 2, "0.1.1" ] ])
+    expect(store.compat_stats.map { |row| [ row.platform, row.hits, row.oldest_version ] })
+      .to eq([ [ "*", 0, nil ], [ "android", 2, "0.1.1" ] ])
   end
 
   # Another process lowers the row to `version` after this one's first read.

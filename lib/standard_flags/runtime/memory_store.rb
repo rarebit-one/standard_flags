@@ -175,9 +175,10 @@ module StandardFlags
       def record_compat(stats)
         @mutex.synchronize do
           @reads[:record_compat] += 1
+          now = Time.now.utc
           stats.each do |stat|
             id = [ stat.key.to_s, stat.platform ]
-            @compat[id] = CompatStats.merge(@compat[id], stat)
+            @compat[id] = CompatStats.merge(@compat[id], stat, now: now)
           end
           stats.size
         end

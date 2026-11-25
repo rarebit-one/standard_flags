@@ -50,36 +50,30 @@ RSpec.describe "wire conformance fixtures" do
     end
   end
 
-  describe "client_status.json" do
-    fixture = ConformanceRegistry.load(ConformanceRegistry.path("wire/client_status.json"))
-    header_names = { "platform" => "X-Client-Platform", "version" => "X-Client-Version", "build" => "X-Client-Build" }
+  {
+    "wire/client_status.json" => "wire", "upgrade/client_status_server.json" => "server"
+  }.each do |path, scope|
+    describe path do
+      fixture = ConformanceRegistry.load(ConformanceRegistry.path(path))
 
-    fixture.fetch("cases").each do |example|
-      it example.fetch("name") do
-        clients = fixture.fetch("clients")
-        StandardFlags.define do
-          clients.each do |entry|
-            attributes = entry.except("name", "grace_days").transform_keys(&:to_sym)
-            attributes[:grace] = entry["grace_days"] if entry.key?("grace_days")
-            client entry.fetch("name"), **attributes
-          end
+      fixture.fetch("cases").each do |example|
+        it example.fetch("name") do
+          expect(ConformanceRegistry.client_status(fixture, example)).to eq(example.fetch("expected"))
         end
-        headers = example.fetch("client").to_h { |field, value| [ header_names.fetch(field), value.to_s ] }
-        lookup = example["store_lookup"]&.transform_keys(&:to_sym)&.transform_values { |version| ->(_app) { version } }
-        result = StandardFlags::ClientStatus.for(
-          StandardFlags::Client.from_headers(headers), group: example["group"]&.to_sym,
-          today: Date.iso8601(example.fetch("today") { fixture.fetch("today") }), env: example.fetch("env_vars", {}), lookup: lookup
-        )
+      end
 
-        expect(result.to_h).to eq(example.fetch("expected"))
+      it "is #{scope}-scoped, and only a server file uses ENV pins or store lookups" do
+        expect(fixture.fetch("scope")).to eq(scope)
+        extras = fixture.fetch("cases").flat_map { |example| example.keys & %w[env_vars store_lookup scope] }
+        expect(extras.empty?).to be(scope == "wire")
       end
     end
+  end
 
-    it "keeps the wire cases free of ENV pins and store lookups" do
-      wire = fixture.fetch("cases").reject { |example| example["scope"] == "server" }
-      expect(wire.map { |example| example.keys & %w[env_vars store_lookup] }.flatten).to eq([])
-      expect(fixture.fetch("cases").map { |example| example.dig("expected", "status") }.uniq)
-        .to match_array(StandardFlags::ClientStatus::STATUSES)
+  it "covers every status between the client_status files" do
+    statuses = %w[wire/client_status.json upgrade/client_status_server.json].flat_map do |path|
+      ConformanceRegistry.load(ConformanceRegistry.path(path)).fetch("cases").map { |example| example.dig("expected", "status") }
     end
+    expect(statuses.uniq).to match_array(StandardFlags::ClientStatus::STATUSES)
   end
 end

@@ -4,8 +4,12 @@ require "active_support/core_ext/class/attribute"
 module StandardFlags
   module ClientStatus
     # `GET /client/status` as a controller mixin. It runs before
-    # authentication: it reads only the X-Client-* headers, never
-    # `standard_flags_context`, and says nothing about the caller.
+    # authentication and says nothing about the caller. It reads the client
+    # exactly as `requires_client_version` does
+    # (`standard_flags_upgrade_client`: the X-Client-* headers, with any
+    # field they lack taken from a client `standard_flags_context` names),
+    # so a build the guard refuses is always told why here. Keep that
+    # context safe to call before sign-in (nil, the default, is).
     #
     #   # config/routes.rb
     #   get "client/status", to: "client_status#client_status"
@@ -43,7 +47,7 @@ module StandardFlags
       # GET /client/status
       def client_status
         options = standard_flags_client_status_options
-        result = ClientStatus.for(standard_flags_client, group: options[:group])
+        result = ClientStatus.for(standard_flags_upgrade_client, group: options[:group])
         response.cache_control.merge!(max_age: options[:max_age], public: false)
         vary = response.headers["Vary"].to_s.split(",").map(&:strip).reject(&:empty?)
         vary += StandardFlags.config.client_headers.values.compact.map(&:to_s)

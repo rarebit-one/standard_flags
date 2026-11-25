@@ -64,7 +64,7 @@ module DatabaseHelpers
 
   def run_generated_migration(direction, destination: File.expand_path("../../../tmp/db_migration", __dir__))
     FileUtils.rm_rf(destination)
-    capture_stdout { StandardFlags::Generators::MigrationsGenerator.start([], destination_root: destination) }
+    capture_stdout { StandardFlags::Generators::MigrationsGenerator.start([ "--no-check-tables" ], destination_root: destination) }
     load Dir[File.join(destination, "db/migrate/*_create_standard_flags_tables.rb")].first
     load Dir[File.join(destination, "db/migrate/*_create_standard_flags_compat_stats.rb")].first
     migrations = [ CreateStandardFlagsTables, CreateStandardFlagsCompatStats ]

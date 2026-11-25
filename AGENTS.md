@@ -45,7 +45,7 @@ lib/standard_flags/
 ├── client_app.rb                   # Client registry entry (`client` in config/flags.rb), ENV pins, grace
 ├── client_status.rb + client_status/controller.rb
 │                                   # Upgrade status (ok/recommended/required/unknown); GET /client/status mixin
-├── stores.rb + stores/app_store.rb # Store ceiling lookups; the App Store adapter (autoloaded)
+├── stores.rb + stores/app_store.rb # Per-client store lookups; the App Store adapter (background refresh, autoloaded)
 ├── semantic_version.rb             # StandardFlags::Version: SemVer 2.0 + shorthands, precedence
 ├── version_range.rb                # VersionRange / BuildRange: portable comparator syntax; RubyGems ranges read
 ├── parser.rb                       # The one strict ENV parser
@@ -77,7 +77,8 @@ lib/tasks/standard_flags.rake
 lib/generators/standard_flags/install/    # install, migrations, admin (controller, routes, Inertia pages)
 conformance/                        # Shipped cross-language fixtures, tagged scope server|wire;
                                     #   schema/fixture.schema.json, README.md; wire/ and versions/version_ranges.json
-                                    #   are what clients run; versions/legacy_ranges.json is Ruby-only
+                                    #   are what clients run; versions/legacy_ranges.json and
+                                    #   upgrade/client_status_server.json are Ruby-only
 spec/fixtures/ofrep/openapi.yaml    # Vendored OFREP OpenAPI document (responses validated against it)
 ```
 

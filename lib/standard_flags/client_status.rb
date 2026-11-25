@@ -23,6 +23,12 @@ module StandardFlags
   # still to come during the grace window, a past one once enforced). Dates
   # are UTC.
   #
+  # Versions compare by SemVer precedence, with one exception: a prerelease
+  # of exactly the minimum (or recommended) version meets it, so a beta or
+  # TestFlight build of the required release (`1.5.0-beta.2` against
+  # `1.5.0`) isn't locked out. A prerelease of an older version
+  # (`1.4.9-rc.1`) is still below it.
+  #
   # StandardFlags::ClientStatus::Controller serves it as `GET
   # /client/status`; StandardFlags::Controller's `requires_client_version`
   # answers 426 when it is `upgrade_required`.
@@ -52,32 +58,41 @@ module StandardFlags
     # The status of `client` (a Client or a Hash) against the clients
     # declared in `group:` (nil is the default group).
     def for(client, registry: StandardFlags.registry, group: nil, today: Delivery.utc_today,
-            env: StandardFlags.config.env_source, lookup: StandardFlags.config.client_store_lookup)
+            env: StandardFlags.config.env_source)
       client = Client.wrap(client)
       platform = client.platform
       app = platform && registry.client_for(platform, group: group)
-      return result("unknown", platform, client.version, app&.resolve(env), lookup) if platform.nil? || client.version.nil?
+      return result("unknown", platform, client.version, app&.resolve(env)) if platform.nil? || client.version.nil?
       return Result.new(status: "ok", platform: platform, version: client.version, min_version: nil, recommended: nil,
                         enforce_at: nil, store_url: nil, client_app: nil) unless app
 
-      decide(client.version, app.resolve(env), today, lookup)
+      decide(client.version, app.resolve(env), today)
     end
 
-    def decide(version, policy, today, lookup)
-      ceiling = policy.ceiling(lookup: lookup)
+    # Whether `version` meets `target`: at or above it, or a prerelease of
+    # exactly that release.
+    def meets?(version, target)
+      return true if version >= target
+
+      version.prerelease? && !target.prerelease? &&
+        [ version.major, version.minor, version.patch ] == [ target.major, target.minor, target.patch ]
+    end
+
+    def decide(version, policy, today)
+      ceiling = policy.ceiling
       minimum = capped(policy.min_version, ceiling)
-      if minimum && version < minimum
+      if minimum && !meets?(version, minimum)
         status = today >= policy.enforce_on ? "upgrade_required" : "upgrade_recommended"
-        return result(status, policy.app.platform, version, policy, lookup, ceiling: ceiling, enforce_at: policy.enforce_on)
+        return result(status, policy.app.platform, version, policy, ceiling: ceiling, enforce_at: policy.enforce_on)
       end
 
       recommended = capped(policy.recommended, ceiling)
-      status = recommended && version < recommended ? "upgrade_recommended" : "ok"
-      result(status, policy.app.platform, version, policy, lookup, ceiling: ceiling)
+      status = recommended && !meets?(version, recommended) ? "upgrade_recommended" : "ok"
+      result(status, policy.app.platform, version, policy, ceiling: ceiling)
     end
 
-    def result(status, platform, version, policy, lookup, ceiling: :lookup, enforce_at: nil)
-      ceiling = policy&.ceiling(lookup: lookup) if ceiling == :lookup
+    def result(status, platform, version, policy, ceiling: :ask, enforce_at: nil)
+      ceiling = policy&.ceiling if ceiling == :ask
       Result.new(status: status, platform: platform, version: version,
                  min_version: policy && capped(policy.min_version, ceiling),
                  recommended: policy && capped(policy.recommended, ceiling),

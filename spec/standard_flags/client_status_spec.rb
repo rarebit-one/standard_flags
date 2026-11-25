@@ -40,38 +40,60 @@ RSpec.describe StandardFlags::ClientStatus do
     expect(status({ platform: "unknown", version: "0.5.0" }).to_h).to include("status" => "unknown", "platform" => nil)
   end
 
+  it "lets a prerelease of exactly the minimum meet it, but not one of an older version" do
+    expect(status({ platform: "android", version: "0.4.0-beta.2" }, today: Date.new(2026, 12, 8)).status).to eq("upgrade_recommended")
+    expect(status({ platform: "android", version: "0.3.9-rc.1" }, today: Date.new(2026, 12, 8)).status).to eq("upgrade_required")
+    expect(described_class.meets?(StandardFlags::Version.parse("1.0.0-rc.1"), StandardFlags::Version.parse("1.0.0-rc.2"))).to be(false)
+  end
+
   describe "the store ceiling" do
-    it "asks a single lookup about iOS clients only" do
-      lookup = double("lookup")
-      allow(lookup).to receive(:call) { |app| app.platform == "ios" ? "2.0.0" : raise("asked about #{app.name}") }
-      StandardFlags.config.client_store_lookup = lookup
-      expect(status({ platform: "ios", version: "1.9.5" }).to_h).to include("status" => "upgrade_required", "min_version" => "2.0.0")
-      expect(status({ platform: "android", version: "0.3.0" }).to_h).to include("min_version" => "0.4.0")
-      expect(lookup).to have_received(:call).once
+    # Two iOS apps: the consumer app with a lookup, and a second app (group
+    # :driver) whose newest store build is 1.4.0.
+    def define_ios(lookup)
+      StandardFlags.define do
+        client :consumer_ios, platform: :ios, min_version: "3.0.0", since: "2026-01-01", available: "2.9.0", store_lookup: lookup
+        client :driver_ios, platform: :ios, group: :driver, min_version: "1.5.0", since: "2026-01-01", available: "1.4.0"
+      end
     end
 
-    it "takes a Hash of client name => lookup" do
-      StandardFlags.config.client_store_lookup = { "android_app" => ->(_app) { "0.4.5" } }
-      expect(status({ platform: "android", version: "0.4.0" }).to_h).to include("status" => "upgrade_recommended", "recommended" => "0.4.5")
-      expect(status({ platform: "ios", version: "1.9.0" }).to_h).to include("min_version" => "1.9.0")
+    it "caps only the client that declares the lookup" do
+      define_ios(->(_app) { "3.0.0" })
+      expect(status({ platform: "ios", version: "1.4.0" }, group: :driver).to_h).to include("status" => "ok", "min_version" => "1.4.0")
+      expect(status({ platform: "ios", version: "2.9.5" }).to_h).to include("status" => "upgrade_required", "min_version" => "3.0.0")
+    end
+
+    it "passes the lookup its own client" do
+      seen = []
+      define_ios(->(app) { seen << app.name and "2.9.0" })
+      status({ platform: "ios", version: "2.9.0" })
+      status({ platform: "ios", version: "1.4.0" }, group: :driver)
+      expect(seen).to eq([ :consumer_ios ])
+    end
+
+    it "lets a pinned _AVAILABLE beat the lookup" do
+      define_ios(->(_app) { "3.0.0" })
+      StandardFlags.config.env_source = { "STANDARD_FLAGS_CLIENT_CONSUMER_IOS_AVAILABLE" => "0.0.0" }
+      expect(status({ platform: "ios", version: "2.0.0" }).to_h).to include("status" => "ok", "min_version" => "0.0.0")
     end
 
     it "falls back to available: when the lookup fails, answers nonsense or nil, and reports a failure once" do
       events = []
       subscriber = ActiveSupport::Notifications.subscribe("store_lookup_failed.standard_flags") { |*, payload| events << payload }
-      { ->(_app) { raise Timeout::Error } => "1.9.0", ->(_app) { "latest" } => "1.9.0", ->(_app) { nil } => "1.9.0",
-        ->(_app) { 2 } => "2.0.0" }.each do |lookup, expected|
-        expect(status({ platform: "ios", version: "1.9.0" }, lookup: { ios_app: lookup }).min_version.to_s).to eq(expected)
+      { ->(_app) { raise Timeout::Error } => "2.9.0", ->(_app) { "latest" } => "2.9.0", ->(_app) { nil } => "2.9.0",
+        ->(_app) { 3 } => "3.0.0" }.each do |lookup, expected|
+        define_ios(lookup)
+        expect(status({ platform: "ios", version: "1.0.0" }).min_version.to_s).to eq(expected)
       end
-      2.times { status({ platform: "ios", version: "1.9.0" }, lookup: { ios_app: ->(_app) { raise Timeout::Error } }) }
-      expect(events).to eq([ { client: :ios_app, error_class: "Timeout::Error" } ])
+      define_ios(->(_app) { raise Timeout::Error })
+      2.times { status({ platform: "ios", version: "1.0.0" }) }
+      expect(events).to eq([ { store: "Proc", client: :consumer_ios, reason: "Timeout::Error" } ])
     ensure
       ActiveSupport::Notifications.unsubscribe(subscriber)
     end
 
     it "never lifts the minimum above the code's, only caps it" do
-      result = status({ platform: "android", version: "0.4.0" }, lookup: { android_app: ->(_app) { "9.0.0" } })
-      expect(result.to_h).to include("min_version" => "0.4.0", "recommended" => "0.5.0")
+      define_ios(->(_app) { "9.0.0" })
+      expect(status({ platform: "ios", version: "2.9.0" }).to_h).to include("min_version" => "3.0.0")
     end
   end
 end

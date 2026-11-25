@@ -34,15 +34,16 @@ module StandardFlags
 
     # The client registry with its ENV pins applied: the values in force
     # (versions as Strings, dates as YYYY-MM-DD), the pins that applied and
-    # those ignored. `available` is the declared or pinned one; a store
-    # lookup isn't asked here, so a health check never waits on a store.
+    # those ignored. Pins in force are listed here, as flags' pins are, and
+    # never warn; only ignored ones do. `available` is the declared or
+    # pinned one; a store lookup isn't asked here.
     def clients(registry, env)
       registry.clients.values.sort_by(&:name).map do |app|
         policy = app.resolve(env)
         { name: app.name, platform: app.platform, group: app.group, min_version: policy.min_version&.to_s,
           since: policy.since&.iso8601, enforce_on: policy.enforce_on&.iso8601, grace_days: app.grace_days,
           recommended: policy.recommended&.to_s, available: policy.available&.to_s, store_url: app.store_url,
-          store_lookup: store_lookup?(app), pinned: policy.pinned, rejected: policy.rejected }
+          store_lookup: app.store_lookup?, pinned: policy.pinned, rejected: policy.rejected }
       end
     end
 
@@ -55,8 +56,9 @@ module StandardFlags
       stats, error = compat_stats(windows) if tracking
       grouped = (stats || []).group_by { |stat| stat.key.to_s }
       { tracking: tracking, error: error, flags: windows.map do |definition|
+        markers, rows = grouped.fetch(definition.key.to_s, []).partition(&:marker?)
         { flag: definition.key, until_clients: definition.until_clients.transform_values(&:to_s),
-          stats: stats && grouped.fetch(definition.key.to_s, []).map(&:to_h) }
+          tracking_since: markers.first&.first_seen_at&.utc&.iso8601, stats: stats && rows.map(&:to_h) }
       end }
     end
 
@@ -64,11 +66,6 @@ module StandardFlags
       [ Runtime.compat_stats(windows.map(&:key)), nil ]
     rescue StandardError => e
       [ nil, (e.cause_class if e.is_a?(Runtime::StoreError)) || e.class.name ]
-    end
-
-    def store_lookup?(app)
-      lookup = StandardFlags.config.client_store_lookup
-      lookup.is_a?(Hash) ? lookup.key?(app.name) || lookup.key?(app.name.to_s) : !lookup.nil? && app.platform == "ios"
     end
 
     # One line per warning, names only.
@@ -80,10 +77,11 @@ module StandardFlags
         runtime_warnings(report[:runtime]) + client_warnings(report[:clients]) + compat_warnings(report[:compat])
     end
 
+    # Only ignored pins warn: a valid break-glass pin is listed under
+    # `clients:`, never turned into a health warning.
     def client_warnings(clients)
       Array(clients).flat_map do |client|
-        client[:pinned].map { |var| "#{var} pins client :#{client[:name]} (break-glass; the code's value is overridden)" } +
-          client[:rejected].map { |var| "#{var} for client :#{client[:name]} is not a valid value (ignored)" }
+        client[:rejected].map { |var| "#{var} for client :#{client[:name]} was ignored (invalid, or a raised minimum without _SINCE)" }
       end
     end
 

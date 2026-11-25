@@ -2,43 +2,29 @@ require "spec_helper"
 
 RSpec.describe StandardFlags::Stores::AppStore do
   let(:now) { [ 1000.0 ] }
-  let(:store) { described_class.new(bundle_id: "com.example.app", country: "GB", clock: -> { now.first }) }
+  let(:jobs) { [] }
+  let(:store) do
+    described_class.new(bundle_id: "com.example.app", country: "GB", clock: -> { now.first }, runner: ->(&job) { jobs << job })
+  end
   let(:http) { instance_double(Net::HTTP) }
   let(:responses) { [] }
 
-  def ok(body)
-    Net::HTTPOK.new("1.1", "200", "OK").tap { |response| allow(response).to receive(:body).and_return(body) }
+  def app
+    StandardFlags::ClientApp.declare(:ios_app, platform: :ios)
+  end
+
+  def ok(*chunks)
+    Net::HTTPOK.new("1.1", "200", "OK").tap do |response|
+      allow(response).to receive(:read_body) { |&block| chunks.each(&block) }
+    end
   end
 
   def lookup(version)
     ok(JSON.generate("resultCount" => 1, "results" => [ { "bundleId" => "com.example.app", "version" => version } ]))
   end
 
-  before do
-    allow(Net::HTTP).to receive(:start) { |*, &block| block.call(http) }
-    allow(http).to receive(:request) do
-      answer = responses.shift
-      answer.is_a?(Exception) ? raise(answer) : answer
-    end
-  end
-
-  it "asks Apple's public lookup API with a short timeout and reads the version" do
-    responses << lookup("2.1.0")
-    expect(store.call).to eq(StandardFlags::Version.parse("2.1.0"))
-    expect(Net::HTTP).to have_received(:start)
-      .with("itunes.apple.com", 443, use_ssl: true, open_timeout: 2, read_timeout: 2, write_timeout: 2)
-    expect(http).to have_received(:request).with(having_attributes(path: "/lookup?bundleId=com.example.app&country=gb"))
-    expect(store.uri.to_s).to eq("https://itunes.apple.com/lookup?bundleId=com.example.app&country=gb")
-  end
-
-  it "caches an answer for an hour per process" do
-    responses.push(lookup("2.1.0"), lookup("2.2"))
-    store.call
-    now[0] += 3599
-    expect(store.call.to_s).to eq("2.1.0")
-    now[0] += 1
-    expect(store.call.to_s).to eq("2.2.0")
-    expect(http).to have_received(:request).twice
+  def run_jobs
+    jobs.shift.call while jobs.any?
   end
 
   def failures
@@ -50,56 +36,120 @@ RSpec.describe StandardFlags::Stores::AppStore do
     ActiveSupport::Notifications.unsubscribe(subscriber)
   end
 
-  it "answers nil after a failure, and asks again after retry_after" do
-    responses.push(Net::OpenTimeout.new, lookup("2.1.0"))
-    events = failures do
-      expect(store.call).to be_nil
-      now[0] += 299
-      expect(store.call).to be_nil
-      now[0] += 1
-      expect(store.call.to_s).to eq("2.1.0")
+  before do
+    allow(Net::HTTP).to receive(:start) { |*, &block| block.call(http) }
+    allow(http).to receive(:request) do |_request, &block|
+      answer = responses.shift
+      answer.is_a?(Exception) ? raise(answer) : block.call(answer)
     end
-    expect(events).to eq([ { store: "app_store", error_class: "Net::OpenTimeout" } ])
   end
 
-  it "never raises: every kind of failure keeps the last good answer" do
-    responses.push(lookup("2.1.0"), Net::HTTPServiceUnavailable.new("1.1", "503", "x"), ok("not json"),
-                   ok(JSON.generate("results" => [])), lookup("2.1.0.4"), ok("{}" + (" " * 300_000)))
-    events = failures do
-      6.times do
-        expect(store.call.to_s).to eq("2.1.0")
-        now[0] += 3600
-      end
+  it "never waits: the first call answers nil and refreshes in the background" do
+    responses << lookup("2.1.0")
+    expect(store.call(app)).to be_nil
+    expect(jobs.size).to eq(1)
+    run_jobs
+    expect(store.call(app)).to eq(StandardFlags::Version.parse("2.1.0"))
+    expect(Net::HTTP).to have_received(:start)
+      .with("itunes.apple.com", 443, use_ssl: true, open_timeout: 5, read_timeout: 5, write_timeout: 5, ssl_timeout: 5)
+    expect(http).to have_received(:request).with(having_attributes(path: "/lookup?bundleId=com.example.app&country=gb"))
+  end
+
+  it "starts one refresh at a time, and the next after the ttl" do
+    responses.push(lookup("2.1.0"), lookup("2.2"))
+    3.times { store.call(app) }
+    expect(jobs.size).to eq(1)
+    run_jobs
+    now[0] += 3599
+    store.call(app)
+    expect(jobs).to be_empty
+    now[0] += 1
+    expect(store.call(app).to_s).to eq("2.1.0")
+    run_jobs
+    expect(store.call(app).to_s).to eq("2.2.0")
+  end
+
+  it "keeps the last good answer through failures, backing off up to the ttl" do
+    responses.push(lookup("2.1.0"), *Array.new(6) { Net::OpenTimeout.new })
+    store.refresh!(app)
+    waits = []
+    6.times do
+      now[0] += 100_000
+      store.call(app)
+      started = now.first
+      run_jobs
+      expect(store.call(app).to_s).to eq("2.1.0")
+      waits << (store.instance_variable_get(:@next_at) - started)
     end
-    expect(events.map { |event| event[:error_class] })
+    expect(waits).to eq([ 300, 600, 1200, 2400, 3600, 3600 ])
+  end
+
+  it "reports every kind of failure as a reason, naming the client" do
+    responses.push(Net::HTTPServiceUnavailable.new("1.1", "503", "x"), ok("not json"), ok(JSON.generate("results" => [])),
+                   lookup("2.1.0.4"), ok("{", " " * 200_000, " " * 200_000))
+    events = failures { 5.times { store.refresh!(app) } }
+    expect(events.map { |event| event[:reason] })
       .to eq([ "HTTP 503", "JSON::ParserError", "no usable version", "no usable version", "response too large" ])
+    expect(events.first).to eq(store: "app_store", client: :ios_app, reason: "HTTP 503")
+    expect(store.call(app)).to be_nil
   end
 
-  it "lets only one thread ask at a time; the others use what is cached" do
+  it "gives each fetch one overall deadline" do
+    slow = described_class.new(bundle_id: "com.example.app", deadline: 0.05, runner: ->(&job) { job.call })
+    allow(Net::HTTP).to receive(:start) { sleep 1 }
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    events = failures { slow.refresh! }
+    expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 0.5
+    expect(events.map { |event| event[:reason] }).to eq([ "Timeout::Error" ])
+  end
+
+  it "runs refreshes on a thread by default, so a stalled store never holds up a request" do
     gate = Queue.new
-    allow(http).to receive(:request) do
+    threads = []
+    default = described_class.new(bundle_id: "com.example.app", runner: ->(&job) { threads << described_class::THREAD_RUNNER.call(&job) })
+    allow(Net::HTTP).to receive(:start) do |*, &block|
       gate.pop
-      lookup("3.0.0")
+      block.call(http)
     end
-    asker = Thread.new { store.call }
-    sleep 0.01 until store.instance_variable_get(:@mutex).locked?
-    expect(store.call).to be_nil
+    responses << lookup("3.0.0")
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    expect(default.call(app)).to be_nil
+    expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 0.1
     gate << :go
-    expect(asker.value.to_s).to eq("3.0.0")
-    expect(http).to have_received(:request).once
+    threads.each(&:join)
+    expect(default.call(app).to_s).to eq("3.0.0")
   end
 
-  it "takes the ClientApp it is asked about and ignores it, so it works as a lookup" do
+  it "starts its own refresh in a forked child, whatever the parent was doing" do
+    store.call(app)
+    expect(jobs.size).to eq(1)
+    allow(Process).to receive(:pid).and_return(Process.pid + 1)
+    store.call(app)
+    expect(jobs.size).to eq(2)
+  end
+
+  it "survives a runner that can't start the refresh" do
+    broken = described_class.new(bundle_id: "com.example.app", runner: ->(&_job) { raise ThreadError, "can't create Thread" })
+    events = failures { expect(broken.call(app)).to be_nil }
+    expect(events).to eq([ { store: "app_store", client: :ios_app, reason: "ThreadError" } ])
+    expect { broken.call(app) }.not_to raise_error
+  end
+
+  it "works as a client's store_lookup" do
     responses << lookup("1.9.0")
-    StandardFlags.define { client :ios_app, platform: :ios, min_version: "2.0.0", since: "2026-11-01" }
-    StandardFlags.config.client_store_lookup = store
+    lookup_store = store
+    StandardFlags.define do
+      client :ios_app, platform: :ios, min_version: "2.0.0", since: "2026-11-01", store_lookup: lookup_store
+    end
+    lookup_store.refresh!
     result = StandardFlags::ClientStatus.for({ platform: "ios", version: "1.9.0" }, today: Date.new(2026, 12, 1))
     expect(result.to_h).to include("status" => "ok", "min_version" => "1.9.0")
   end
 
-  it "validates its arguments" do
+  it "validates its arguments and builds its URL" do
     expect { described_class.new(bundle_id: " ") }.to raise_error(ArgumentError, /bundle_id:/)
     expect { described_class.new(bundle_id: "x", country: "usa") }.to raise_error(ArgumentError, /country:/)
     expect(described_class.new(bundle_id: " com.example.app ").bundle_id).to eq("com.example.app")
+    expect(store.uri.to_s).to eq("https://itunes.apple.com/lookup?bundleId=com.example.app&country=gb")
   end
 end
