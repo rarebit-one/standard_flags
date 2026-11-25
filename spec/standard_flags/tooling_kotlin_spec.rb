@@ -116,13 +116,22 @@ RSpec.describe StandardFlags::Tooling::Kotlin do
         "NewCheckout" => "NEW_CHECKOUT_#{hash.call('NewCheckout')}", "chatV1" => "CHAT_V1_#{hash.call('chatV1')}",
         "chat_v1" => "CHAT_V1", "newCheckout" => "NEW_CHECKOUT_#{hash.call('newCheckout')}", "new_checkout" => "NEW_CHECKOUT"
       )
-      expect(source).to include("    /** Wire newCheckout (another spelling has NEW_CHECKOUT). */\n    NEW_CHECKOUT_#{hash.call('newCheckout')}(")
+      expect(source).to include("    /** Wire newCheckout (NEW_CHECKOUT is the wire new_checkout). */\n    NEW_CHECKOUT_#{hash.call('newCheckout')}(")
       expect(KotlinSyntax.check!(source)).to be(true)
     end
 
-    it "suffixes every spelling when none of them is snake_case" do
+    it "suffixes every spelling when none of them is the name in some case, and says so" do
       define_flags { flag :checkout, owner: "x", permanent: true, expose: { mobile: %i[newCheckout NewCheckout] } }
-      expect(entries(described_class.new.render, "MobileFeature").values).to all(match(/\ANEW_CHECKOUT_\h{8}\z/))
+      source = described_class.new.render
+
+      expect(entries(source, "MobileFeature").values).to all(match(/\ANEW_CHECKOUT_\h{8}\z/))
+      expect(source).to include("/** Wire newCheckout (it shares NEW_CHECKOUT with NewCheckout, so each carries a suffix). */")
+    end
+
+    it "lets a literal SCREAMING_SNAKE_CASE wire keep the name, after a snake_case one" do
+      expect(described_class.wire_constants(%w[chatEnabled CHAT_ENABLED]))
+        .to eq("CHAT_ENABLED" => "CHAT_ENABLED", "chatEnabled" => "CHAT_ENABLED_#{described_class.spelling_hash('chatEnabled')}")
+      expect(described_class.wire_constants(%w[CHAT_ENABLED chat_enabled])["chat_enabled"]).to eq("CHAT_ENABLED")
     end
 
     it "never renames an existing constant when an unrelated wire is added" do
@@ -135,9 +144,75 @@ RSpec.describe StandardFlags::Tooling::Kotlin do
     end
 
     it "raises only if a suffixed name is itself taken" do
-      suffixed = "NEW_CHECKOUT_#{Digest::SHA256.hexdigest('newCheckout')[0, 8].upcase}"
-      expect { described_class.wire_constants([ "new_checkout", "newCheckout", suffixed.downcase ]) }
-        .to raise_error(described_class::NameClash, /would all be #{suffixed}/)
+      suffixed = "NEW_CHECKOUT_#{described_class.spelling_hash('newCheckout')}"
+      expect { described_class.wire_constants(%w[new_checkout newCheckout other], "other" => suffixed) }
+        .to raise_error(described_class::NameClash, /"newCheckout" would be #{suffixed}/)
+    end
+  end
+
+  describe "names across regenerations" do
+    def entries(source, enum)
+      source[/enum class #{enum}\(.*?\n\}/m].scan(/^    ([A-Z0-9_]+)\("((?:[^"\\]|\\.)*)"/).to_h { |name, text| [ text, name ] }
+    end
+
+    it "keeps a shipped constant when a wire that maps to the same name is added later" do
+      define_flags { flag :checkout, owner: "x", permanent: true, expose: { mobile: :newCheckout } }
+      shipped = described_class.new.render
+      define_flags { flag :checkout, owner: "x", permanent: true, expose: { mobile: %i[newCheckout new_checkout] } }
+
+      fresh = entries(described_class.new.render, "MobileFeature")
+      kept = described_class.new(previous: shipped).render
+      expect(fresh).to eq("newCheckout" => "NEW_CHECKOUT_#{described_class.spelling_hash('newCheckout')}", "new_checkout" => "NEW_CHECKOUT")
+      expect(entries(kept, "MobileFeature"))
+        .to eq("newCheckout" => "NEW_CHECKOUT", "new_checkout" => "NEW_CHECKOUT_#{described_class.spelling_hash('new_checkout')}")
+      expect(kept).to include("/** Wire new_checkout (NEW_CHECKOUT is the wire newCheckout). */")
+      expect(KotlinSyntax.check!(kept)).to be(true)
+    end
+
+    it "keeps a suffixed name after its rival is removed, and says why" do
+      define_flags { flag :checkout, owner: "x", permanent: true, expose: { mobile: %i[newCheckout new_checkout] } }
+      shipped = described_class.new.render
+      define_flags { flag :checkout, owner: "x", permanent: true, expose: { mobile: :newCheckout } }
+      kept = described_class.new(previous: shipped).render
+
+      expect(entries(kept, "MobileFeature")).to eq("newCheckout" => "NEW_CHECKOUT_#{described_class.spelling_hash('newCheckout')}")
+      expect(kept).to include("(named when another wire held NEW_CHECKOUT; kept so client code keeps compiling)")
+    end
+
+    it "keeps value names, and names new values around them" do
+      define_flags { mode :theme, owner: "x", values: %w[a-b dark], permanent: true, expose: { mobile: :theme } }
+      shipped = described_class.new.render
+      define_flags { mode :theme, owner: "x", values: %w[a_b a-b dark café], permanent: true, expose: { mobile: :theme } }
+
+      expect(entries(described_class.new(previous: shipped).render, "ThemeValue"))
+        .to eq("a_b" => "A_B_2", "a-b" => "A_B", "dark" => "DARK", "caf\\u00E9" => "CAF")
+    end
+
+    it "reads back every string the generator writes" do
+      [ "plain", "save $5", "contr\u00f4le", "a\"b\\c", "\u{1F600}", "" ].each do |text|
+        expect(described_class.unstring(described_class.string(text))).to eq(text)
+      end
+      expect(described_class.unstring('"\\q"')).to be_nil
+      expect(described_class.unstring('"\\uD800"')).to be_nil
+    end
+
+    it "makes names afresh for an enum it can't read back, and ignores what isn't its output" do
+      expect(described_class.previous_names(nil)).to eq({})
+      expect(described_class.previous_names("enum class MobileFeature(val wire: String, val type: FeatureType) {\n    A(\"x\", FeatureType.BOOLEAN),\n    A(\"y\", FeatureType.BOOLEAN),\n}\n"))
+        .to eq("MobileFeature" => {})
+    end
+
+    it "is what the rake task does with the existing file" do
+      root = Pathname(Dir.mktmpdir)
+      allow(Rails).to receive(:root).and_return(root)
+      define_flags { flag :checkout, owner: "x", permanent: true, expose: { mobile: :newCheckout } }
+      expect { RakeTasks.invoke("standard_flags:kotlin") }.to output(/Wrote/).to_stdout
+      define_flags { flag :checkout, owner: "x", permanent: true, expose: { mobile: %i[newCheckout new_checkout] } }
+      expect { RakeTasks.invoke("standard_flags:kotlin") }.to output(/Wrote/).to_stdout
+
+      expect(root.join("config/StandardFlags.kt").read).to include('    NEW_CHECKOUT("newCheckout", FeatureType.BOOLEAN),')
+    ensure
+      FileUtils.rm_rf(root)
     end
   end
 

@@ -77,7 +77,8 @@ namespace :standard_flags do
     # without a tombstone serving it, changed type, or a public audience
     # went private, or when a manifest (or a given BASE) can't be read.
     # Without BASE= the committed file is the baseline, with a warning;
-    # BASE_OPTIONAL=1 lets a missing BASE file skip the contract checks.
+    # BASE_OPTIONAL=1 lets a BASE file that doesn't exist skip the contract
+    # checks; a directory or an unreadable file still fails.
     desc "Check the committed manifest against the registry: BASE=<base branch's manifest> [BASE_OPTIONAL=1]"
     task check: :environment do
       path = Rails.root.join(StandardFlags.config.manifest_path)
@@ -85,13 +86,13 @@ namespace :standard_flags do
       base_path = ENV["BASE"].to_s.strip
       base =
         if base_path.empty? then :committed
-        elsif File.directory?(base_path) then StandardFlags::Tooling::ManifestCheck::Unavailable.new("BASE #{base_path} is a directory")
-        elsif !File.exist?(base_path) then StandardFlags::Tooling::ManifestCheck::Unavailable.new("BASE #{base_path} does not exist")
+        elsif File.directory?(base_path) then StandardFlags::Tooling::ManifestCheck::Unavailable.new(reason: "BASE #{base_path} is a directory")
+        elsif !File.exist?(base_path) then StandardFlags::Tooling::ManifestCheck::Unavailable.new(reason: "BASE #{base_path} does not exist", missing: true)
         else
           begin
             File.binread(base_path).force_encoding(Encoding::UTF_8)
           rescue SystemCallError => e
-            StandardFlags::Tooling::ManifestCheck::Unavailable.new("BASE #{base_path} can't be read (#{e.class})")
+            StandardFlags::Tooling::ManifestCheck::Unavailable.new(reason: "BASE #{base_path} can't be read (#{e.class})")
           end
         end
       check = StandardFlags::Tooling::ManifestCheck.new(committed: committed, base: base, base_optional: ENV["BASE_OPTIONAL"] == "1")
@@ -110,7 +111,10 @@ namespace :standard_flags do
   task kotlin: :environment do
     path = Rails.root.join(StandardFlags.config.kotlin_path)
     FileUtils.mkdir_p(path.dirname)
-    File.write(path, StandardFlags::Tooling::Kotlin.new.render)
+    # The existing file's entry names are kept, so shipped client code keeps
+    # compiling against the same constants. Delete it to name everything afresh.
+    previous = File.file?(path) ? File.read(path) : nil
+    File.write(path, StandardFlags::Tooling::Kotlin.new(previous: previous).render)
     puts "Wrote #{path.relative_path_from(Rails.root)}"
   end
 

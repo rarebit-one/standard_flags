@@ -27,11 +27,17 @@ module StandardFlags
     # Without it (`base: :committed`) the committed file is the baseline, and
     # the result warns that a regenerated file hides removals. `base: nil` or
     # an Unavailable (a BASE file that is missing or unreadable) fails with
-    # :baseline_unavailable, unless `base_optional: true` (first adoption: the
-    # base branch has no manifest yet), which skips the contract checks with
+    # :baseline_unavailable, still reporting a stale committed file, unless
+    # `base_optional: true` and the file is genuinely missing (`missing:
+    # true`; first adoption: the base branch has no manifest yet), which skips
+    # the contract checks with
     # a warning. Any manifest may be version 1.
     #
-    # Shortening a deprecated wire's `until:` is a warning, not a break.
+    # Shortening a deprecated wire's `until:` is a warning, not a break; so
+    # is a new wire whose generated Kotlin name (`Kotlin.constant`) is an
+    # existing wire's in the same audience (`new_checkout` beside a shipped
+    # `newCheckout`): `standard_flags:kotlin` keeps the existing constant when
+    # its previous output is in place, and client code should be checked.
     #
     #   check = StandardFlags::Tooling::ManifestCheck.new(committed: File.read(path), base: base_json)
     #   result = check.call
@@ -48,8 +54,13 @@ module StandardFlags
                         "file only, which a regenerated file passes; pass BASE= the base branch's manifest in CI".freeze
 
       # A baseline that couldn't be read, and why ("tmp/base.json does not
-      # exist").
-      Unavailable = Data.define(:reason)
+      # exist"). `missing` is true only when the file doesn't exist, the one
+      # case `base_optional:` forgives; a directory or a read error never is.
+      Unavailable = Data.define(:reason, :missing) do
+        def initialize(reason:, missing: false)
+          super
+        end
+      end
 
       # One contract break. `kind` is :removed_wire, :type_changed or
       # :audience_made_private (`wire` nil).
@@ -81,7 +92,7 @@ module StandardFlags
         def regenerate?
           case status
           when :missing, :stale then true
-          when :breaking then stale
+          when :breaking, :baseline_unavailable then stale
           when :unreadable then error_source == :committed
           else false
           end
@@ -127,7 +138,8 @@ module StandardFlags
             committed
           when nil, Unavailable
             reason = @base.is_a?(Unavailable) ? @base.reason : "no baseline was given"
-            return result(:baseline_unavailable, stale: false, error: reason) unless @base_optional
+            forgiven = @base_optional && (@base.nil? || @base.missing)
+            return unavailable(reason, committed, current) unless forgiven
 
             warnings << "no baseline (#{reason}; BASE_OPTIONAL): the removed-wire and type checks were skipped"
             nil
@@ -135,7 +147,7 @@ module StandardFlags
           end
         stale = committed.nil? || stale?
         removed, changed, privatised = base ? breaks(base, current) : [ [], [], [] ]
-        warnings.concat(shortened_until(base, current)) if base
+        warnings.concat(shortened_until(base, current) + kotlin_collisions(base, current)) if base
         result(status(removed + changed + privatised, committed, stale), stale: stale, changes: committed && stale ? self.class.changes(committed.data, current.data) : [],
                        removed_wires: removed, type_changes: changed, audiences_made_private: privatised, warnings: warnings)
       rescue SourceError => e
@@ -217,6 +229,14 @@ module StandardFlags
 
       private
 
+      # :baseline_unavailable, with the staleness of the committed file still
+      # reported.
+      def unavailable(reason, committed, current)
+        stale = committed.nil? || stale?
+        changes = committed && stale ? self.class.changes(committed.data, current.data) : []
+        result(:baseline_unavailable, stale: stale, changes: changes, error: reason)
+      end
+
       def status(findings, committed, stale)
         return :breaking unless findings.empty?
         return :missing if committed.nil?
@@ -288,6 +308,21 @@ module StandardFlags
 
           "tombstone :#{now.key} now serves #{wire} through #{now.until.iso8601}, earlier than the " \
             "#{wire.until.iso8601} shipped clients were promised"
+        end
+      end
+
+      # New wires that would take an existing wire's Kotlin entry name.
+      def kotlin_collisions(base, current)
+        current.each_wire.filter_map do |wire|
+          next if base.wire(wire.audience, wire.name)
+
+          name = Kotlin.constant(wire.name)
+          existing = base.wires.fetch(wire.audience, {}).keys.sort.find { |other| Kotlin.constant(other) == name }
+          next unless existing
+
+          "new wire #{wire} and existing wire #{wire.audience}.#{existing} are both #{name} in generated Kotlin; " \
+            "regenerate with the previous standard_flags:kotlin output in place so #{existing} keeps #{name}, " \
+            "and check which wire client code means"
         end
       end
 

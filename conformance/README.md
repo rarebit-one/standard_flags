@@ -112,8 +112,11 @@ last good one and that payload's version, when any of these hold:
 - it is not strict RFC 8259 JSON. Lenient parsers must be configured
   strictly: no unquoted literals (`tru`, `True`, `NaN`, `Infinity`), single
   quotes, unquoted keys, malformed numbers (`01`, `1.`, `-`), trailing
-  commas, raw control characters (U+0000 to U+001F) inside strings, or
-  escapes other than `\" \\ \/ \b \f \n \r \t \uXXXX`;
+  commas, raw control characters (U+0000 to U+001F) inside strings,
+  escapes other than `\" \\ \/ \b \f \n \r \t \uXXXX`, or a `\uXXXX`
+  surrogate that isn't a high one (D800–DBFF) followed directly by a
+  `\uXXXX` low one (DC00–DFFF). A lone or reversed surrogate is rejected,
+  even by parsers that would otherwise accept it;
 - it nests more than `max_nesting` containers. Every object and array
   counts, the top level being 1, so exactly `max_nesting` is accepted;
 - the top level is not an object;

@@ -3651,6 +3651,275 @@
           }
         }
       ]
+    },
+    {
+      "name": "strict JSON: a lone or reversed surrogate escape rejects the payload; a high surrogate followed by a low one is a character",
+      "steps": [
+        {
+          "payload": {
+            "flags": [
+              {
+                "key": "chat_enabled",
+                "value": true,
+                "reason": "DEFAULT",
+                "variant": "on"
+              },
+              {
+                "key": "gates",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH",
+                "variant": "sensor"
+              },
+              {
+                "key": "homeHero",
+                "value": "savings",
+                "reason": "SPLIT",
+                "variant": "savings"
+              },
+              {
+                "key": "insights_enabled",
+                "value": false,
+                "reason": "KILL_SWITCH",
+                "variant": "off"
+              }
+            ],
+            "metadata": {
+              "version": "v1"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":\"\\ud800\",\"reason\":\"SPLIT\",\"variant\":\"x\"}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":\"\\udc00\",\"reason\":\"SPLIT\",\"variant\":\"x\"}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":\"\\ude00\\ud83d\",\"reason\":\"SPLIT\",\"variant\":\"x\"}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":\"\\ud800\\u0041\",\"reason\":\"SPLIT\",\"variant\":\"x\"}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":\"\\ud83d\\ude00\",\"reason\":\"SPLIT\",\"variant\":\"\\ud83d\\ude00\"}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": true,
+            "version": "v2",
+            "reads": {
+              "chat_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "insights_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "not_loaded",
+                "value": "off",
+                "reason": null
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "😀",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        }
+      ]
     }
   ]
 }

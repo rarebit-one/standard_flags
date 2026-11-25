@@ -27,7 +27,7 @@ enum class MobileFeature(val wire: String, val type: FeatureType) {
     CHAT_ENABLED("chatEnabled", FeatureType.BOOLEAN),
     @Deprecated("No longer declared; served as a static value through 2027-03-01")
     CHAT_MODE("chatMode", FeatureType.STRING),
-    /** Wire chatV1 (another spelling has CHAT_V1). */
+    /** Wire chatV1 (CHAT_V1 is the wire chat_v1). */
     CHAT_V1_2228882F("chatV1", FeatureType.BOOLEAN),
     @Deprecated("No longer declared; served as a static value through 2027-03-01")
     CHAT_V1("chat_v1", FeatureType.BOOLEAN),

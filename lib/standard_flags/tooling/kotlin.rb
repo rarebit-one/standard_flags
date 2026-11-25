@@ -22,16 +22,22 @@ module StandardFlags
     #   `fromValue`.
     #
     # Entry names are the wire name or value in SCREAMING_SNAKE_CASE
-    # (`homeHero` → `HOME_HERO`). Generation never fails on a clash:
+    # (`homeHero` → `HOME_HERO`).
+    #
+    # Names are stable across regenerations: given the file written last
+    # time (`previous:`; the rake task passes the existing
+    # `config.kotlin_path`), every wire and value keeps the name it had there,
+    # and only new ones are named. So a `new_checkout` alias added later never
+    # takes `NEW_CHECKOUT` from a shipped `newCheckout`.
+    #
+    # A new name never fails on a clash:
     #
     # * Wires of one audience that map to the same name (`new_checkout` and
-    #   `newCheckout`, an alias pair a rename leaves behind): the snake_case
-    #   spelling, whose upcase is the name, keeps it; every other spelling
-    #   gets `_` and the first 8 hex digits of the SHA-256 of its exact
-    #   spelling (`NEW_CHECKOUT_1F0A2B3C`), and its KDoc names the wire. The
-    #   suffix depends only on the wire itself, so adding a wire never
-    #   renames an existing constant unless the new wire maps to the same
-    #   name.
+    #   `newCheckout`, an alias pair a rename leaves behind): the spelling
+    #   that already is the name in some case (`new_checkout`, else
+    #   `NEW_CHECKOUT`) keeps it, unless an existing wire holds it; every
+    #   other spelling gets `_` and the first 8 hex digits of the SHA-256 of
+    #   its exact spelling (`NEW_CHECKOUT_1F0A2B3C`), and its KDoc says why.
     # * Values of one flag that map to the same name: the first keeps it, and
     #   each later one, in declared order, gets the first free `_2`, `_3`, …
     #
@@ -48,10 +54,56 @@ module StandardFlags
                          super this throw true try typealias typeof val var when while].freeze
       INDENT = "    ".freeze
 
-      def initialize(registry: StandardFlags.registry, package: StandardFlags.config.kotlin_package, manifest: nil)
+      # `previous` is the Kotlin source this generator wrote last time (or
+      # nil); its entry names are kept.
+      def initialize(registry: StandardFlags.registry, package: StandardFlags.config.kotlin_package, manifest: nil, previous: nil)
         @manifest = manifest || Manifest.new(registry: registry)
         @package = package&.to_s
+        @previous = self.class.previous_names(previous)
         validate_package!
+      end
+
+      ENUM_BLOCK = /^enum class ([A-Za-z_][A-Za-z0-9_]*)\((?:val wire: String, val type: FeatureType|val value: String)\) \{\n(.*?)^\}/m
+      ENTRY = /^ {4}([A-Z][A-Z0-9_]*)\(("(?:[^"\\]|\\.)*")/
+
+      # `{ enum name => { wire or value => entry name } }` from a file this
+      # generator wrote. An enum whose entries can't be read back
+      # unambiguously is left out, so its names are made afresh.
+      def self.previous_names(source)
+        return {} unless source.is_a?(String)
+
+        source.scan(ENUM_BLOCK).to_h do |enum, body|
+          pairs = body.scan(ENTRY).map { |name, literal| [ unstring(literal), name ] }
+          valid = pairs.none? { |text, _| text.nil? } && pairs.map(&:first).uniq.size == pairs.size &&
+                  pairs.map(&:last).uniq.size == pairs.size
+          [ enum, valid ? pairs.to_h : {} ]
+        end
+      end
+
+      # The text of a `"..."` literal this generator wrote (`.string`), or
+      # nil.
+      def self.unstring(literal)
+        units = []
+        body = literal[1...-1]
+        index = 0
+        while index < body.length
+          char = body[index]
+          if char != "\\"
+            units.concat(char.encode("UTF-16BE").unpack("n*"))
+            index += 1
+          elsif body[index + 1] == "u" && body[index + 2, 4].to_s.match?(/\A\h{4}\z/)
+            units << body[index + 2, 4].hex
+            index += 6
+          elsif %w[\\ " $].include?(body[index + 1])
+            units << body[index + 1].ord
+            index += 2
+          else
+            return nil
+          end
+        end
+        units.pack("n*").force_encoding(Encoding::UTF_16BE).encode(Encoding::UTF_8)
+      rescue EncodingError
+        nil
       end
 
       def render
@@ -85,25 +137,56 @@ module StandardFlags
       end
 
       # Entry names for one audience's wires, `{ wire => name }` (see the
-      # class comment). Raises NameClash only if a suffixed name is itself
-      # taken.
-      def self.wire_constants(wires)
+      # class comment). Wires in `previous` (`{ wire => name }`) keep their
+      # names. Raises NameClash only if a suffixed name is itself taken.
+      def self.wire_constants(wires, previous = {})
         names = {}
-        wires.group_by { |wire| constant(wire) }.each do |base, spellings|
-          plain = spellings.size == 1 ? spellings.first : spellings.find { |wire| wire.match?(/\A[a-z0-9_]+\z/) && wire.upcase == base }
-          spellings.each { |wire| names[wire] = wire == plain ? base : "#{base}_#{Digest::SHA256.hexdigest(wire)[0, 8].upcase}" }
-        end
-        taken = names.group_by(&:last).find { |_, pairs| pairs.size > 1 }
-        raise NameClash, "wires #{taken.last.map(&:first).inspect} would all be #{taken.first} in Kotlin; rename one" if taken
+        used = Set.new
+        wires.each do |wire|
+          name = previous[wire]
+          next if name.nil? || used.include?(name)
 
+          names[wire] = name
+          used << name
+        end
+        fresh = wires.reject { |wire| names.key?(wire) }
+        fresh.group_by { |wire| constant(wire) }.each do |base, spellings|
+          plain = spellings.size == 1 ? spellings.first : plain_spelling(base, spellings)
+          spellings.sort.each do |wire|
+            name = wire == plain && !used.include?(base) ? base : "#{base}_#{spelling_hash(wire)}"
+            raise NameClash, "wire #{wire.inspect} would be #{name} in Kotlin, which another wire already is; rename one" if used.include?(name)
+
+            names[wire] = name
+            used << name
+          end
+        end
         names
       end
 
-      # Entry names for one flag's values, in declared order: a clash gets the
+      # Of several spellings that map to `base`, the one that already is
+      # `base` in lower or upper case (`new_checkout`, else `NEW_CHECKOUT`).
+      def self.plain_spelling(base, spellings)
+        spellings.find { |wire| wire == base.downcase } || spellings.find { |wire| wire == base }
+      end
+
+      def self.spelling_hash(wire)
+        Digest::SHA256.hexdigest(wire)[0, 8].upcase
+      end
+
+      # Entry names for one flag's values, in declared order: values in
+      # `previous` (`{ value => name }`) keep their names; a clash gets the
       # first free `_2`, `_3`, …
-      def self.value_constants(values)
+      def self.value_constants(values, previous = {})
         used = Set.new
+        kept = values.to_h do |value|
+          name = previous[value]
+          name = nil if name.nil? || used.include?(name)
+          used << name if name
+          [ value, name ]
+        end
         values.map do |value|
+          next kept[value] if kept[value]
+
           base = constant(value)
           name = base
           suffix = 1
@@ -163,13 +246,14 @@ module StandardFlags
 
       def audience_enum(audience, wires, names)
         name = claim(names, "#{audience.camelize}Feature", "audience #{audience}")
-        constants = self.class.wire_constants(wires.map(&:first))
+        constants = self.class.wire_constants(wires.map(&:first), @previous.fetch(name, {}))
         out = [ "/** The wires the #{audience} audience is told, ordered by wire name. */",
                 "enum class #{name}(val wire: String, val type: FeatureType) {" ]
         wires.each do |wire, type, flag, tombstone|
           constant = constants.fetch(wire)
           notes = []
-          notes << "Wire #{wire} (another spelling has #{self.class.constant(wire)})." unless constant == self.class.constant(wire)
+          note = rename_note(wire, constant, constants)
+          notes << note if note
           notes << "Values: [#{value_enum_name(flag)}]." if flag && type == "string" && value_flag?(flag)
           out << "#{INDENT}/** #{notes.join(' ')} */" unless notes.empty?
           if tombstone
@@ -180,6 +264,19 @@ module StandardFlags
         out << "#{INDENT};" << "" << "#{INDENT}companion object {"
         out << "#{INDENT * 2}fun fromWire(wire: String): #{name}? = values().firstOrNull { it.wire == wire }"
         out << "#{INDENT}}" << "}" << ""
+      end
+
+      # Why a wire's entry isn't its plain name, or nil when it is.
+      def rename_note(wire, constant, constants)
+        base = self.class.constant(wire)
+        return nil if constant == base
+
+        holder = constants.key(base)
+        others = constants.keys.select { |other| other != wire && self.class.constant(other) == base }
+        if holder then "Wire #{wire} (#{base} is the wire #{holder})."
+        elsif !others.empty? then "Wire #{wire} (it shares #{base} with #{others.join(', ')}, so each carries a suffix)."
+        else "Wire #{wire} (named when another wire held #{base}; kept so client code keeps compiling)."
+        end
       end
 
       def value_flags(data)
@@ -197,7 +294,7 @@ module StandardFlags
       def value_enum(flag, names)
         name = claim(names, value_enum_name(flag), "flag #{flag.fetch('key')}")
         values = flag.fetch("values").map(&:to_s)
-        constants = self.class.value_constants(values)
+        constants = self.class.value_constants(values, @previous.fetch(name, {}))
         wires = flag.fetch("audiences").sort.map { |audience, list| "#{audience}: #{list.join(', ')}" }.join("; ")
         out = [ "/** Values of #{wires}. */", "enum class #{name}(val value: String) {" ]
         values.zip(constants).each { |value, constant| out << "#{INDENT}#{constant}(#{self.class.string(value)})," }

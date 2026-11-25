@@ -1893,26 +1893,31 @@ A wire counts as served by a tombstone only while its `until:` is today or
 later (UTC). A deprecated wire whose `until:` has passed in the baseline may
 be deleted: its window is over. Moving a wire to another flag of the same
 type is fine. Moving it to another audience removes it from the first.
-Moving a deprecated wire's `until:` earlier is printed as a warning, since
-shipped clients were promised the later date, but it doesn't fail.
+Two things print a warning without failing:
+- moving a deprecated wire's `until:` earlier, since shipped clients were
+  promised the later date;
+- adding a wire whose generated Kotlin name is an existing wire's in the
+  same audience (`new_checkout` beside a shipped `newCheckout`). See
+  [Kotlin](#kotlin) for how constants stay put.
 
 The baseline is `BASE=`, the base branch's manifest, so a PR that
 regenerates the file in the same commit still can't drop a wire. Without
 `BASE=` the committed file stands in, and the check prints a warning that a
 regenerated file hides removals. A `BASE` file that is missing, a directory
-or unreadable fails with exit 2, unless `BASE_OPTIONAL=1`. Set that only for
-first adoption, when the base branch has no manifest yet. The contract
+or unreadable fails with exit 2, and a stale committed file is still
+reported. `BASE_OPTIONAL=1` forgives only a file that doesn't exist: set it
+for first adoption, when the base branch has no manifest yet. The contract
 checks are then skipped, with a warning.
 
 ```yaml
 # .github/workflows/ci.yml, in a job with the app's Ruby and database set up.
-# MANIFEST is config.manifest_path.
 - uses: actions/checkout@v4
 - name: Flag manifest
   env:
     BASE_REF: ${{ github.base_ref || 'main' }}
-    MANIFEST: config/flags.manifest.json
   run: |
+    MANIFEST="$(bin/rails runner 'print StandardFlags.config.manifest_path')"
+    test -n "$MANIFEST" || { echo "could not read config.manifest_path" >&2; exit 1; }
     git fetch --no-tags --depth=1 origin "$BASE_REF"
     mkdir -p tmp
     if git cat-file -e "FETCH_HEAD:$MANIFEST" 2>/dev/null; then
@@ -1924,9 +1929,11 @@ checks are then skipped, with a warning.
     fi
 ```
 
-A failed fetch fails the step (the default shell exits on error), and `git
-show` runs only when the file exists at the base, so no error turns into a
-skipped check.
+The path comes from `config.manifest_path`, so the step can't look in the
+wrong place. A failed fetch fails the step (the default shell exits on
+error), and `git show` runs only when the file exists at the base, so no
+error turns into a skipped check. In the one PR that moves the manifest,
+pass `BASE=` the old path's contents yourself.
 
 `StandardFlags::Tooling::ManifestCheck` is the same check as a class, for
 apps with their own CI scripts.
@@ -1982,14 +1989,19 @@ enum class HomeHeroValue(val value: String) {
   audience, in declared order.
 - Entry names are SCREAMING_SNAKE_CASE (`homeHero` becomes `HOME_HERO`).
   Values that can't start an identifier get `V_` (`2fa` becomes `V_2FA`).
-- Generation never fails on a name clash:
+- Names are stable across regenerations. The task reads the file it wrote
+  last time (`config.kotlin_path`), and every wire and value keeps the name
+  it had there; only new ones are named. A `new_checkout` alias added after
+  a shipped `newCheckout` gets a suffixed name and never takes
+  `NEW_CHECKOUT`. Delete the file to name everything afresh. Commit it, or
+  restore it in CI before regenerating, so names survive a clean checkout.
+- A new name never fails on a clash:
   - When two wires of one audience map to the same name (`new_checkout` and
-    `newCheckout`, the alias pair a rename leaves), the snake_case spelling
-    keeps the plain name. Every other spelling gets `_` plus 8 hex digits
-    of the SHA-256 of its exact spelling (`NEW_CHECKOUT_1F0A2B3C`), and its
-    KDoc names the wire. The suffix depends only on the wire itself, so
-    adding a wire never renames an existing constant unless the new wire
-    maps to the same name.
+    `newCheckout`, the alias pair a rename leaves), the spelling that already
+    is the name in some case (`new_checkout`, else `NEW_CHECKOUT`) keeps it,
+    unless an existing wire holds it. Every other spelling gets `_` plus 8
+    hex digits of the SHA-256 of its exact spelling
+    (`NEW_CHECKOUT_1F0A2B3C`), and its KDoc says why.
   - When two values of one flag map to the same name, later ones in
     declared order get the first free `_2`, `_3`, and so on.
 - The source is ASCII: every other character is escaped.

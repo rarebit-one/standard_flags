@@ -115,11 +115,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Exit 2 when the contract breaks: a wire the baseline told an audience is
     gone and no tombstone still serves it (`until:` today or later, UTC); a
     wire changed type; or a public audience serving wires became private.
-  - Exit 2 too when `BASE` is missing or unreadable, unless
-    `BASE_OPTIONAL=1`, or when a manifest can't be read.
+  - Exit 2 too when `BASE` is missing or unreadable (a stale committed file
+    is still reported), or when a manifest can't be read. `BASE_OPTIONAL=1`
+    forgives only a `BASE` file that doesn't exist.
   - Without `BASE` the committed file is the baseline, with a warning.
   - A deprecated wire past its `until:` may be dropped. An earlier `until:`
-    is a warning.
+    is a warning, and so is a new wire whose Kotlin name is an existing
+    wire's.
   - The README has a CI snippet that fetches the base ref explicitly.
 - **`standard_flags:kotlin`** (`config.kotlin_path`, default
   `config/StandardFlags.kt`; `config.kotlin_package`, default none) writes
@@ -132,10 +134,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - per mode or experiment exposed to any audience, `enum class
     <Key>Value(val value: String)` with `fromValue`.
 
-  The generated source is ASCII. Generation never fails on a clash:
-  - when wires of one audience map to the same name, the snake_case spelling
-    keeps it and other spellings get a suffix from the SHA-256 of their exact
-    spelling;
+  The generated source is ASCII.
+
+  Names are stable across regenerations: the task keeps every entry name the
+  existing file has (`Kotlin.new(previous:)`) and names only new wires and
+  values. A new name never fails on a clash:
+  - when wires of one audience map to the same name, the spelling that
+    already is the name (snake_case, else SCREAMING_SNAKE_CASE) keeps it,
+    unless an existing wire holds it, and other spellings get a suffix from
+    the SHA-256 of their exact spelling;
   - when values of one flag do, later ones get the first free `_2`, `_3`, …
 
   `Tooling::Kotlin::NameClash` is left for clashing type names and
@@ -156,7 +163,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `conformance/wire/client_state.json` gains strict-JSON cases: unquoted
     literals, single quotes, unquoted keys, malformed numbers, trailing
     commas, raw control characters, invalid escapes, and nesting beyond the
-    new `limits.max_nesting` (100). It also gains a version rule: a
+    new `limits.max_nesting` (100), and lone or reversed surrogate escapes. It
+    also gains a version rule: a
     `metadata.version` is kept only when it is printable ASCII without a
     space or `"`.
 

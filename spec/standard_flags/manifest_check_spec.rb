@@ -232,10 +232,29 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
     end
 
     it "skips the contract checks with a warning when the baseline is optional" do
-      result = check(committed: regenerated, base: described_class::Unavailable.new("BASE x does not exist"), base_optional: true).call
+      result = check(committed: regenerated, base: described_class::Unavailable.new(reason: "BASE x does not exist", missing: true),
+                     base_optional: true).call
 
       expect([ result.status, result.findings ]).to eq([ :ok, [] ])
       expect(result.warnings).to eq([ "no baseline (BASE x does not exist; BASE_OPTIONAL): the removed-wire and type checks were skipped" ])
+    end
+
+    it "forgives only a missing file: a directory or read error still fails with BASE_OPTIONAL" do
+      unreadable = described_class::Unavailable.new(reason: "BASE x can't be read (Errno::EACCES)")
+      expect(check(committed: regenerated, base: unreadable, base_optional: true).call.status).to eq(:baseline_unavailable)
+      expect(check(committed: regenerated, base: nil, base_optional: true).call.status).to eq(:ok)
+    end
+
+    it "still reports a stale committed file when the baseline is unavailable" do
+      define_flags { kill_switch :ai_assistant, owner: "assistant", expose: { web: :assistant } }
+      subject = described_class.new(committed: shipped, base: described_class::Unavailable.new(reason: "BASE x is a directory"), today: today)
+      result = subject.call
+
+      expect([ result.status, result.exit_code, result.stale ]).to eq([ :baseline_unavailable, 2, true ])
+      lines = subject.render(result, path: "config/flags.manifest.json").lines.map(&:chomp)
+      expect(lines.first).to start_with("standard_flags:manifest:check: the baseline manifest is unavailable (BASE x is a directory).")
+      expect(lines).to include("standard_flags:manifest:check: config/flags.manifest.json is stale:", "  - flag :home_hero",
+                               "Run bin/rails standard_flags:manifest and commit the result.")
     end
 
     it "still names dropped wires when the committed file is missing" do
@@ -311,6 +330,23 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
     expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 2
   end
 
+  it "warns when a new wire would share an existing wire's Kotlin name" do
+    declare do
+      kill_switch :ai_assistant, owner: "assistant", expose: { mobile: %i[chat chatEnabled chat_enabled], web: :assistant }
+      experiment :home_hero, owner: "growth", variants: %w[control savings], expose: { mobile: %i[homeHero HomeHero2] }
+      tombstone :chat_v1, removed: "2026-12-01", serve: { mobile: { chat_v1: false } }, until: "2027-03-01"
+      tombstone :banner_v1, removed: "2026-06-01", serve: { web: { banner: true } }, until: "2026-12-31"
+    end
+    result = check(committed: shipped).call
+
+    expect([ result.status, result.findings ]).to eq([ :stale, [] ])
+    expect(result.warnings).to eq([
+      "new wire mobile.chat_enabled and existing wire mobile.chatEnabled are both CHAT_ENABLED in generated Kotlin; " \
+      "regenerate with the previous standard_flags:kotlin output in place so chatEnabled keeps CHAT_ENABLED, " \
+      "and check which wire client code means"
+    ])
+  end
+
   it "ignores CRLF line endings and trailing newlines, but not other formatting" do
     expect(check(committed: shipped.gsub("\n", "\r\n")).call.status).to eq(:ok)
     expect(check(committed: "#{shipped}\n\n").call.status).to eq(:ok)
@@ -379,6 +415,11 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
       write_manifest
       File.write(root.join("base.json"), shipped.sub('"chatEnabled"', %("chatEnabled",\n          "legacyChat")))
       expect { expect(run(base: root.join("base.json").to_s)).to eq(2) }.to output(/removed wire: mobile.legacyChat/).to_stderr
+    end
+
+    it "exits 2 for a BASE directory even with BASE_OPTIONAL=1" do
+      write_manifest
+      expect { expect(run(base: root.to_s, optional: true)).to eq(2) }.to output(/BASE #{root} is a directory/).to_stderr
     end
 
     it "exits 2 when BASE is missing or a directory" do
