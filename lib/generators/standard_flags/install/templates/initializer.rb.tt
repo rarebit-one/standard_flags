@@ -19,9 +19,12 @@
 #   # Where flags:refs looks for flag reads.
 #   # config.refs_paths = %w[app lib config]
 #
-#   # Outputs of standard_flags:manifest and standard_flags:typescript.
+#   # Outputs of standard_flags:manifest, standard_flags:typescript and
+#   # standard_flags:kotlin.
 #   # config.manifest_path = "config/flags.manifest.json"
 #   # config.typescript_path = "app/javascript/types/standard_flags.d.ts"
+#   # config.kotlin_path = "config/StandardFlags.kt"
+#   # config.kotlin_package = "com.example.flags"
 #
 #   # Runtime rules: per-flag rules stored in this app's database, read
 #   # between the ENV pin and the code default. Needs the migration from

@@ -3,6 +3,9 @@ require "json"
 require "pathname"
 require "active_support/core_ext/string/inflections"
 require "standard_flags/tooling/changes"
+require "standard_flags/tooling/manifest"
+require "standard_flags/tooling/manifest_check"
+require "standard_flags/tooling/kotlin"
 
 module StandardFlags
   # The logic behind the rake tasks, kept out of the rake file so it can be
@@ -299,71 +302,69 @@ module StandardFlags
       end
     end
 
-    # `standard_flags:manifest`: a deterministic description of the flag set
-    # (keys, wire names, kinds, values, audiences, defaults) for client CI.
-    # Entries of kind `flag` and `mode` also say whether they are permanent.
-    # `audiences` maps each audience to its first wire name, as in version 1;
-    # a flag with aliases also lists every wire name per audience under
-    # `wires`, so a version 1 reader still reads it.
-    class Manifest
-      VERSION = 1
-      LIFECYCLE_KINDS = %i[flag mode].freeze
-
-      def initialize(registry: StandardFlags.registry)
-        @registry = registry
-      end
-
-      def to_h
-        {
-          "version" => VERSION,
-          "flags" => @registry.definitions.sort_by(&:key).map { |definition| flag(definition) },
-          "tombstones" => @registry.tombstones.values.sort_by(&:key).map do |tombstone|
-            { "key" => tombstone.key.to_s, "removed" => tombstone.removed.iso8601 }
-          end
-        }
-      end
-
-      def render
-        "#{JSON.pretty_generate(to_h)}\n"
-      end
-
-      private
-
-      def flag(definition)
-        entry = {
-          "key" => definition.key.to_s,
-          "kind" => definition.kind.to_s,
-          "type" => definition.boolean? ? "boolean" : "string",
-          "values" => definition.allowed_values.map { |value| wire(value) },
-          "default" => default(definition),
-          "audiences" => definition.expose.sort.to_h { |audience, name| [ audience.to_s, name ] }
-        }
-        if definition.exposure.any? { |_, wires| wires.size > 1 }
-          entry["wires"] = definition.exposure.sort.to_h { |audience, wires| [ audience.to_s, wires ] }
-        end
-        entry["permanent"] = definition.permanent? if LIFECYCLE_KINDS.include?(definition.kind)
-        entry
-      end
-
-      def default(definition)
-        declared = definition.declared_default
-        return wire(definition.kind_default) if declared.nil?
-        return wire(declared) unless declared.is_a?(Hash)
-
-        { "*" => wire(definition.kind_default) }.merge(declared.sort.to_h { |env, value| [ env, wire(value) ] })
-      end
-
-      def wire(value)
-        value.is_a?(Symbol) ? value.to_s : value
-      end
-    end
-
     # `standard_flags:typescript`: a `.d.ts` with one Features interface per
-    # audience, keyed by wire name; every flag key and its stored values; and
-    # the shapes of StandardFlags::MCP's results, which the admin pages
+    # audience, keyed by wire name; one `<Audience>Wire` union per audience
+    # (every wire it is told, deprecated static wires included, as in the
+    # manifest); every flag key and its stored values; the OFREP request and
+    # response shapes of StandardFlags::OFREP::Controller; and the shapes of
+    # StandardFlags::MCP's results, which the admin pages
     # (`standard_flags:admin`) are typed from.
     class TypeScript
       IDENTIFIER = /\A[A-Za-z_$][A-Za-z0-9_$]*\z/
+
+      # What the OFREP endpoint (StandardFlags::OFREP::Controller) and
+      # `payload(format: :ofrep)` send. Static apart from the wire unions
+      # each response is parameterised with.
+      OFREP_TYPES = <<~TS.freeze
+        // OFREP requests and responses (StandardFlags::OFREP::Controller).
+        export type OfrepReason = #{(Reason::ALL - [ Reason::ERROR ]).map(&:to_json).join(' | ')};
+        export type OfrepErrorCode = #{Delivery::ERROR_CODES.map(&:to_json).join(' | ')};
+
+        export interface OfrepEvaluationRequest {
+          readonly context: {
+            readonly targetingKey?: string;
+            readonly platform?: string;
+            readonly appVersion?: string;
+            readonly build?: string | number;
+          };
+        }
+
+        export interface OfrepEvaluationSuccess<W extends string = string> {
+          readonly key: W;
+          readonly value: boolean | string;
+          readonly reason: OfrepReason;
+          readonly variant: string;
+        }
+
+        export interface OfrepEvaluationFailure<W extends string = string> {
+          readonly key: W;
+          readonly errorCode: OfrepErrorCode;
+          readonly errorDetails: string;
+        }
+
+        export type OfrepEvaluation<W extends string = string> = OfrepEvaluationSuccess<W> | OfrepEvaluationFailure<W>;
+
+        export interface OfrepBulkResponse<W extends string = string> {
+          readonly flags: ReadonlyArray<OfrepEvaluation<W>>;
+          readonly metadata: { readonly version: string };
+        }
+
+        export interface OfrepFlagNotFound {
+          readonly key: string;
+          readonly errorCode: "FLAG_NOT_FOUND";
+          readonly errorDetails: string;
+        }
+
+        export interface OfrepInvalidContext {
+          readonly key?: string;
+          readonly errorCode: "INVALID_CONTEXT";
+          readonly errorDetails: string;
+        }
+
+        export type OfrepBulkResponseByAudience = {
+          readonly [A in keyof WiresByAudience]: OfrepBulkResponse<WiresByAudience[A]>;
+        };
+      TS
 
       # The JSON StandardFlags::MCP returns (and the admin controller passes
       # as props). Static: the flag-specific parts are FlagKey and FlagValues.
@@ -490,12 +491,32 @@ module StandardFlags
         out << "export type FeaturesByAudience = {"
         audiences.each { |audience| out << "  #{property(audience.to_s)}: #{interface_name(audience)};" }
         out << "};" << ""
+        out.concat(wire_types)
         out.concat(flag_types)
+        out << OFREP_TYPES
         out << MCP_TYPES
         out.join("\n")
       end
 
       private
+
+      # `<Audience>Wire` per manifest audience, and WiresByAudience.
+      def wire_types
+        manifest = Manifest.new(registry: @registry).to_h
+        wires = Manifest.wires_in(manifest)
+        names = manifest.fetch("audiences").keys.sort
+        out = names.map do |audience|
+          list = wires.fetch(audience, {}).keys.sort.map(&:to_json)
+          "export type #{wire_type_name(audience)} = #{list.empty? ? 'never' : list.join(' | ')};"
+        end
+        out << "" << "export type WiresByAudience = {"
+        names.each { |audience| out << "  readonly #{property(audience)}: #{wire_type_name(audience)};" }
+        out << "};" << ""
+      end
+
+      def wire_type_name(audience)
+        "#{audience.to_s.camelize}Wire"
+      end
 
       # FlagKey (every declared key) and FlagValues (each flag's stored
       # values: "on"/"off", mode values, variants).

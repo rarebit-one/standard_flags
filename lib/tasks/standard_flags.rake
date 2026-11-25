@@ -71,6 +71,37 @@ namespace :standard_flags do
     puts "Wrote #{path.relative_path_from(Rails.root)}"
   end
 
+  namespace :manifest do
+    # Exit 0 when the committed manifest matches the registry; 1 when it is
+    # stale or missing; 2 when a wire the baseline (BASE=, else the committed
+    # file) told a client is gone without a tombstone serving it, changed
+    # type, or a manifest can't be read.
+    desc "Check the committed manifest against the registry: [BASE=path to the base branch's manifest]"
+    task check: :environment do
+      path = Rails.root.join(StandardFlags.config.manifest_path)
+      committed = File.exist?(path) ? File.read(path) : nil
+      base = ENV["BASE"].to_s.strip
+      options = base.empty? ? {} : { base: File.exist?(base) ? File.read(base) : nil }
+      check = StandardFlags::Tooling::ManifestCheck.new(committed: committed, **options)
+      result = check.call
+      relative = path.relative_path_from(Rails.root).to_s
+      if result.ok?
+        puts check.render(result, path: relative)
+      else
+        warn check.render(result, path: relative)
+        exit result.exit_code
+      end
+    end
+  end
+
+  desc "Write Kotlin enums per audience from the manifest (config.kotlin_path, config.kotlin_package)"
+  task kotlin: :environment do
+    path = Rails.root.join(StandardFlags.config.kotlin_path)
+    FileUtils.mkdir_p(path.dirname)
+    File.write(path, StandardFlags::Tooling::Kotlin.new.render)
+    puts "Wrote #{path.relative_path_from(Rails.root)}"
+  end
+
   desc "Write TypeScript Features types per audience (config.typescript_path)"
   task typescript: :environment do
     path = Rails.root.join(StandardFlags.config.typescript_path)

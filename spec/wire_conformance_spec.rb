@@ -1,10 +1,13 @@
 require "spec_helper"
+require "json_schemer"
 
 # Runs conformance/wire: delivery.json (what the server tells a client),
 # client_state.json (what a client reads from it, through the reference
-# client in spec/support/helpers/client_state.rb) and client_status.json
-# (what GET /client/status answers). Kotlin and TypeScript client libraries
-# run the same files; see conformance/README.md.
+# client in spec/support/helpers/client_state.rb), client_status.json (what
+# GET /client/status answers) and manifest_check.json (what
+# standard_flags:manifest:check and a client's contract check decide).
+# Kotlin and TypeScript client libraries run the same files; see
+# conformance/README.md.
 RSpec.describe "wire conformance fixtures" do
   describe "delivery.json" do
     fixture = ConformanceRegistry.load(ConformanceRegistry.path("wire/delivery.json"))
@@ -75,5 +78,33 @@ RSpec.describe "wire conformance fixtures" do
       ConformanceRegistry.load(ConformanceRegistry.path(path)).fetch("cases").map { |example| example.dig("expected", "status") }
     end
     expect(statuses.uniq).to match_array(StandardFlags::ClientStatus::STATUSES)
+  end
+  describe "manifest_check.json" do
+    fixture = ConformanceRegistry.load(ConformanceRegistry.path("wire/manifest_check.json"))
+    schema = JSONSchemer.schema(Pathname.new(ConformanceRegistry.path("schema/manifest.schema.json")))
+
+    fixture.fetch("cases").each do |example|
+      it example.fetch("name") do
+        today = Date.iso8601(example.fetch("today") { fixture.fetch("today") })
+        result = StandardFlags::Tooling::ManifestCheck.new(committed: example.fetch("committed"), current: example.fetch("current"),
+                                                           current_render: "", today: today).call
+        actual = { "status" => result.status.to_s, "stale" => result.stale,
+                   "removed_wires" => result.removed_wires.map(&:to_h), "type_changes" => result.type_changes.map(&:to_h) }
+
+        expect(actual).to eq(example.fetch("expected"))
+      end
+    end
+
+    it "holds only manifests that validate, version 1 only in server cases" do
+      fixture.fetch("cases").each do |example|
+        example.values_at("committed", "current").each do |manifest|
+          if manifest["version"] == 1
+            expect(example["scope"]).to eq("server"), example["name"]
+          else
+            expect(schema.validate(manifest).map { |error| error["error"] }).to eq([]), example["name"]
+          end
+        end
+      end
+    end
   end
 end

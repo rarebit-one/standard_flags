@@ -70,16 +70,19 @@ lib/standard_flags/
 ├── audit_trail.rb                  # Reads write-path history back from standard_audit's audit_logs
 ├── result.rb / actor.rb / events.rb# Operation results, system actors, published event names
 ├── purge_job.rb                    # Membership purge (autoloaded; needs activejob)
-├── tooling.rb + tooling/           # list / stale / refs / manifest / typescript / show / changes
+├── tooling.rb + tooling/           # list / stale / refs / typescript / show / changes; tooling/manifest.rb
+│                                   #   (v2 writer, v1+v2 reader), manifest_check.rb, kotlin.rb
 ├── notifiers/                      # Logger, Sentry, Metrics subscribers
 └── engine.rb                       # Executor hook, registry loading, subscribers, rake tasks
 lib/tasks/standard_flags.rake
 lib/generators/standard_flags/install/    # install, migrations, admin (controller, routes, Inertia pages)
 conformance/                        # Shipped cross-language fixtures, tagged scope server|wire;
-                                    #   schema/fixture.schema.json, README.md; wire/ and versions/version_ranges.json
-                                    #   are what clients run; versions/legacy_ranges.json and
-                                    #   upgrade/client_status_server.json are Ruby-only
+                                    #   schema/fixture.schema.json (+ manifest.schema.json, manifest v2), README.md;
+                                    #   wire/ and versions/version_ranges.json are what clients run;
+                                    #   versions/legacy_ranges.json and upgrade/client_status_server.json are Ruby-only
 spec/fixtures/ofrep/openapi.yaml    # Vendored OFREP OpenAPI document (responses validated against it)
+spec/fixtures/kotlin/               # Snapshot of standard_flags:kotlin output (UPDATE_SNAPSHOTS=1 rewrites it);
+                                    #   KOTLINC=<command> also compiles it
 ```
 
 ## Key Rules

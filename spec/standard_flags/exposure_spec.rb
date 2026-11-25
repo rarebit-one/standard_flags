@@ -170,11 +170,17 @@ RSpec.describe "exposure, min_client, audiences and deprecated wires" do
       end
     end
 
-    it "lists every alias in the manifest under wires, keeping audiences as in version 1" do
-      flags = StandardFlags::Tooling::Manifest.new.to_h["flags"].to_h { |entry| [ entry["key"], entry ] }
-      expect(flags["ai"]).to include("audiences" => { "mobile" => "chat_enabled", "web" => "ai" },
-                                     "wires" => { "mobile" => %w[chat_enabled insights_enabled], "web" => %w[ai] })
-      expect(flags["new_checkout"]).not_to have_key("wires")
+    it "lists every alias per audience in the manifest, and the static wires tombstones serve" do
+      manifest = StandardFlags::Tooling::Manifest.new.to_h
+      flags = manifest["flags"].to_h { |entry| [ entry["key"], entry ] }
+      expect(flags["ai"]).to include("audiences" => { "mobile" => %w[chat_enabled insights_enabled], "web" => %w[ai] })
+      expect(flags["ai"]).not_to have_key("wires")
+      expect(flags["new_checkout"]["audiences"]).to eq("web" => %w[newCheckout])
+      expect(manifest["tombstones"]).to eq([
+        { "key" => "chat_v1", "removed" => "2026-01-01", "serve" => { "mobile" => { "chat_v1" => false } },
+          "until" => "2026-03-01", "until_clients" => {} },
+        { "key" => "old_banner", "removed" => "2025-01-01" }
+      ])
     end
 
     it "types every alias in the TypeScript features interface" do

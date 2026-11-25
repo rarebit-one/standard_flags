@@ -31,6 +31,7 @@ versions passed outside SemVer).
 | `wire/client_state.json` | `client_state` | wire | OFREP payloads → what client code reads |
 | `wire/client_status.json` | `client_status` | wire | recognised platforms, client registry, X-Client-* header values, today → `/client/status` payload |
 | `upgrade/client_status_server.json` | `client_status` | server | the same, plus ENV pins and store lookups |
+| `wire/manifest_check.json` | `manifest_check` | wire | committed manifest, current manifest, today → ok / stale / breaking, removed wires, type changes |
 
 ## delivery.json: what the server sends
 
@@ -192,6 +193,45 @@ any store lookup; a raised `_MIN_VERSION` needs `_SINCE`, and a pin is a raise u
 `store_lookup` (client name => the version that client's lookup last
 answered; null means no answer, so `available` applies; a lookup caps only
 its own client). Clients skip it.
+## manifest_check.json: when a manifest change breaks clients
+
+The server's `standard_flags:manifest:check` and a client library's contract
+check (the Kotlin library's Gradle task) run these cases, so they agree on
+what breaks a shipped build. Each case has a `committed` manifest (the
+baseline a client was built against), a `current` one and a `today` date
+(the case's, else the file's), all in UTC. The manifests are version 2 and
+validate against [`schema/manifest.schema.json`](schema/manifest.schema.json).
+The one case committing a version 1 manifest is `"scope": "server"`.
+
+A wire is an (audience, wire name) pair. A manifest tells an audience a wire
+in one of two ways:
+
+- a flag lists the wire under its `audiences` for that audience. Its type is
+  the flag's `type`;
+- a tombstone lists it under `serve` for that audience. Its type is
+  `boolean` for true or false and `string` for a string. It is still served
+  while `today <= until`.
+
+The rules:
+
+- **`stale`** is true when the two manifests differ as JSON values. The
+  server task also compares the committed file's bytes with what it would
+  write, which the fixture can't express.
+- **`removed_wires`** lists every wire the committed manifest tells an
+  audience (a static wire only while it is still served on `today`) that the
+  current manifest neither exposes to that audience from a flag nor serves
+  from a tombstone still serving on `today`. A deprecated wire whose `until`
+  has passed may be removed. Moving a wire to another flag of the same type
+  is not a removal. Moving it to another audience is.
+- **`type_changes`** lists every wire both manifests tell the same audience
+  whose type differs, with `from` and `to`.
+- Both lists are sorted by audience, then wire name. **`status`** is
+  `breaking` when either list is non-empty, else `stale` when `stale` is
+  true, else `ok`.
+
+Flag keys, kinds, defaults, values, `min_client` and lifecycle dates only
+make a manifest stale. Removed mode values and variants are not checked:
+clients read unknown values as not usable (see `client_state.json`).
 
 ## versions/version_ranges.json
 
