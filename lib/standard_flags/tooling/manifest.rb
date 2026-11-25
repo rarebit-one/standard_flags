@@ -20,7 +20,12 @@ module StandardFlags
     #     "tombstones": [
     #       { "key": "chat_v1", "removed": "2026-12-01", "serve": { "mobile": { "chat_v1": false } },
     #         "until": "2027-03-01", "until_clients": { "android": "0.6.0" } }
-    #     ]
+    #     ],
+    #     "clients": {
+    #       "android_app": { "platform": "android", "group": null, "min_version": "0.4.0", "since": "2026-12-01",
+    #                        "grace": 7, "recommended": "0.5.0", "available": "0.5.0",
+    #                        "store_url": "https://example.com/app", "store_lookup": false }
+    #     }
     #   }
     #
     # * `audiences` (top level) lists every audience a flag or tombstone
@@ -32,6 +37,11 @@ module StandardFlags
     #   `final` only when declared.
     # * A tombstone has `serve`, `until` and `until_clients` (`{}` when not
     #   given) only when it still declares deprecated wires.
+    # * `clients` is the client registry (`client :name, ...`) as declared in
+    #   code, keyed by name: every attribute is present, null when not
+    #   declared, `grace` in whole days, and `store_lookup` only says whether
+    #   one is configured. ENV break-glass pins and store lookup answers are
+    #   runtime state and never appear.
     #
     # `owner:` and `description:` are left out on purpose: the manifest is the
     # contract client repositories copy, and it holds nothing but what a
@@ -80,6 +90,7 @@ module StandardFlags
           @data = data
           @version = data["version"]
           @audiences = Manifest.audiences_in(data)
+          Manifest.check_clients!(data)
           @wires = Manifest.wires_in(data)
           freeze
         end
@@ -108,7 +119,7 @@ module StandardFlags
           raise Unreadable, "unknown manifest version #{version.inspect} (this gem reads #{READABLE_VERSIONS.join(' and ')})"
         end
         if version >= 2
-          missing = %w[audiences flags tombstones].reject { |field| data.key?(field) }
+          missing = %w[audiences flags tombstones clients].reject { |field| data.key?(field) }
           raise Unreadable, "a version #{version} manifest needs #{missing.join(', ')}" unless missing.empty?
         end
 
@@ -130,6 +141,31 @@ module StandardFlags
 
           [ name, public ]
         end.freeze
+      end
+
+      CLIENT_FIELDS = %w[platform group min_version since grace recommended available store_url store_lookup].freeze
+
+      # A version 2 manifest's `clients`: an object of client name => every
+      # field in CLIENT_FIELDS, typed as the writer writes them.
+      def self.check_clients!(data)
+        return unless data["version"].to_i >= 2
+
+        clients = data["clients"]
+        raise Unreadable, "clients is not an object" unless clients.is_a?(Hash)
+
+        clients.each do |name, client|
+          label = "clients.#{name}"
+          raise Unreadable, "#{label} is not an object" unless client.is_a?(Hash)
+          raise Unreadable, "#{label} needs exactly #{CLIENT_FIELDS.join(', ')}" unless client.keys.sort == CLIENT_FIELDS.sort
+          raise Unreadable, "#{label} platform is not a string" unless client["platform"].is_a?(String) && !client["platform"].empty?
+
+          %w[group min_version recommended available store_url].each do |field|
+            raise Unreadable, "#{label} #{field} is not a string or null" unless client[field].nil? || client[field].is_a?(String)
+          end
+          date!(client["since"], "#{label} since") unless client["since"].nil?
+          raise Unreadable, "#{label} grace is not a whole number of days" unless client["grace"].is_a?(Integer) && client["grace"] >= 0
+          raise Unreadable, "#{label} store_lookup is not true or false" unless [ true, false ].include?(client["store_lookup"])
+        end
       end
 
       # `{ audience => { wire => Wire } }` for a version 1 or 2 manifest.
@@ -265,7 +301,8 @@ module StandardFlags
           "version" => VERSION,
           "audiences" => audiences,
           "flags" => @registry.definitions.sort_by(&:key).map { |definition| flag(definition) },
-          "tombstones" => @registry.tombstones.values.sort_by(&:key).map { |tombstone| tombstone(tombstone) }
+          "tombstones" => @registry.tombstones.values.sort_by(&:key).map { |tombstone| tombstone(tombstone) },
+          "clients" => @registry.clients.sort_by { |name, _| name.to_s }.to_h { |name, client| [ name.to_s, client(client) ] }
         }
       end
 
@@ -314,6 +351,20 @@ module StandardFlags
         entry["remove_by"] = definition.remove_by.iso8601 if definition.remove_by
         entry["final"] = wire(definition.final) unless definition.final.nil?
         entry
+      end
+
+      def client(client)
+        {
+          "platform" => client.platform,
+          "group" => client.group&.to_s,
+          "min_version" => client.min_version&.to_s,
+          "since" => client.since&.iso8601,
+          "grace" => client.grace_days,
+          "recommended" => client.recommended&.to_s,
+          "available" => client.available&.to_s,
+          "store_url" => client.store_url,
+          "store_lookup" => client.store_lookup?
+        }
       end
 
       def tombstone(tombstone)

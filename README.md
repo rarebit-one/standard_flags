@@ -18,7 +18,9 @@ conditions, a raisable `FeatureDisabled`, flag-gated MCP tools and
 [client delivery](#client-delivery) (an OFREP endpoint mixin, bootstrap
 embeds, minimum client versions and deprecated wires). Unreleased on `main`:
 [client upgrades](#client-upgrades) (a client registry, `GET /client/status`,
-a 426 guard and measured compatibility windows). See [Roadmap](#roadmap).
+a 426 guard and measured compatibility windows) and the
+[client contract](#client-contract) (manifest version 2, a CI check, Kotlin
+and TypeScript generators). See [Roadmap](#roadmap).
 
 - [Install](#install)
 - [Declaring flags](#declaring-flags)
@@ -1845,7 +1847,12 @@ turn it into client types.
   "tombstones": [
     { "key": "chat_v1", "removed": "2026-12-01", "serve": { "mobile": { "chat_v1": false } },
       "until": "2027-03-01", "until_clients": { "android": "0.6.0" } }
-  ]
+  ],
+  "clients": {
+    "android_app": { "platform": "android", "group": null, "min_version": "0.4.0", "since": "2026-12-01",
+                     "grace": 7, "recommended": "0.5.0", "available": "0.5.0",
+                     "store_url": "https://example.com/app", "store_lookup": false }
+  }
 }
 ```
 
@@ -1860,6 +1867,11 @@ turn it into client types.
   declared.
 - A tombstone with deprecated wires carries `serve`, `until` and
   `until_clients` (`{}` when not given).
+- `clients` is the [client registry](#the-client-registry) as declared in
+  code, keyed by name. Every attribute is present (null when not declared),
+  `grace` is in whole days, and `store_lookup` only says whether one is
+  configured. ENV break-glass pins and store lookup answers are runtime
+  state and never appear. Client changes only make the manifest stale.
 - `owner:` and `description:` are left out on purpose. Client repositories
   copy this file, so it holds only what a client can already learn from the
   wire, plus lifecycle dates. Operators read owners through `flags:list`,
@@ -2383,11 +2395,10 @@ headers, portable version ranges, build conditions, `FeatureDisabled` and
 gated MCP tools, an OFREP endpoint mixin and an embeddable payload with
 ETags, minimum client versions and deprecated wires, and the portable
 conformance suite, a client registry with `GET /client/status`, a 426 guard,
-grace windows and a store ceiling, and measured compatibility windows. Next:
-the manifest contract checked in client CI and the Kotlin client library. Phase 4 adds
-conformance suite, and the client contract (manifest version 2,
-`standard_flags:manifest:check`, Kotlin and TypeScript generators). Next: an
-upgrade endpoint and compatibility windows. Phase 4 adds
+grace windows and a store ceiling, measured compatibility windows, and the
+client contract (manifest version 2, `standard_flags:manifest:check`, Kotlin
+and TypeScript generators). Next: the Kotlin client library, with the
+manifest check in client CI. Phase 4 adds
 experiment exposure tracking and staged rollout plans with automatic
 halts.
 

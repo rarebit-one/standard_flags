@@ -96,7 +96,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -188,7 +189,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "ok",
@@ -290,7 +292,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -382,7 +385,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "stale",
@@ -484,7 +488,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -594,7 +599,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "stale",
@@ -696,7 +702,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -790,7 +797,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "stale",
@@ -892,7 +900,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -983,7 +992,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "breaking",
@@ -1090,7 +1100,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -1177,7 +1188,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "stale",
@@ -1279,7 +1291,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -1362,7 +1375,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "breaking",
@@ -1473,7 +1487,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -1551,7 +1566,8 @@
             "key": "chat_v1",
             "removed": "2026-12-01"
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "breaking",
@@ -1659,7 +1675,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -1737,7 +1754,8 @@
             "key": "chat_v1",
             "removed": "2026-12-01"
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "breaking",
@@ -1845,7 +1863,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -1923,7 +1942,8 @@
             "key": "chat_v1",
             "removed": "2026-12-01"
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "stale",
@@ -2025,7 +2045,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -2117,7 +2138,8 @@
             "until": "2027-01-31",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "breaking",
@@ -2228,7 +2250,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -2323,7 +2346,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "breaking",
@@ -2432,7 +2456,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -2524,7 +2549,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "breaking",
@@ -2633,7 +2659,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -2740,7 +2767,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "stale",
@@ -2842,7 +2870,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -2934,7 +2963,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "breaking",
@@ -3041,7 +3071,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -3133,7 +3164,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "stale",
@@ -3235,7 +3267,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -3327,7 +3360,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "breaking",
@@ -3384,7 +3418,8 @@
             "until": "2026-12-31",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -3427,7 +3462,8 @@
             "until": "2026-12-31",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "stale",
@@ -3529,7 +3565,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -3632,7 +3669,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "breaking",
@@ -3741,9 +3779,11 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
+        "clients": {},
         "tombstones": [
           {
             "key": "banner_v1",
@@ -3935,7 +3975,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -4027,7 +4068,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "stale",
@@ -4129,7 +4171,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -4222,7 +4265,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "invalid",
@@ -4320,7 +4364,8 @@
             },
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -4412,7 +4457,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "invalid",
@@ -4511,7 +4557,8 @@
             "until": "2027-02-30",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -4603,7 +4650,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "invalid",
@@ -4702,7 +4750,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "current": {
         "version": 2,
@@ -4777,7 +4826,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "breaking",
@@ -4962,7 +5012,8 @@
             "until": "2027-03-01",
             "until_clients": {}
           }
-        ]
+        ],
+        "clients": {}
       },
       "expected": {
         "status": "breaking",

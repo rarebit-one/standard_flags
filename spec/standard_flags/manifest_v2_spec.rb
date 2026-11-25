@@ -23,7 +23,7 @@ RSpec.describe StandardFlags::Tooling::Manifest do
   let(:flags) { manifest["flags"].to_h { |entry| [ entry["key"], entry ] } }
 
   it "writes version 2 with every audience and whether it is public" do
-    expect(manifest.keys).to eq(%w[version audiences flags tombstones])
+    expect(manifest.keys).to eq(%w[version audiences flags tombstones clients])
     expect(manifest["version"]).to eq(2)
     expect(manifest["audiences"]).to eq(
       "kiosk" => { "public" => false }, "mobile" => { "public" => false },
@@ -49,6 +49,33 @@ RSpec.describe StandardFlags::Tooling::Manifest do
     expect(flags["home_hero"].keys).to eq(%w[key kind type values default audiences min_client])
     expect(flags["legacy_auth"]).to include("remove_by" => "2027-06-01").and(satisfy { |entry| !entry.key?("permanent") })
     expect(described_class.new.render).not_to include("owner", "description", "internal note", "payments")
+  end
+
+  it "lists the client registry as declared in code, never pins or lookup answers" do
+    lookup = ->(_app) { "9.9.9" }
+    StandardFlags.config.audiences = nil
+    define_flags do
+      client :ios_app, platform: :ios, min_version: "2.0", since: "2026-12-01", recommended: "2.1.0", available: "2.1.0",
+                       store_url: "https://example.com/ios", store_lookup: lookup, grace: 14
+      client :android_app, platform: :android
+      client :kiosk_web, platform: :web, group: :kiosk, min_version: "1.0.0", since: "2026-11-01"
+    end
+    set_env("STANDARD_FLAGS_CLIENT_IOS_APP_MIN_VERSION" => "1.2.3")
+
+    expect(described_class.new.to_h["clients"]).to eq(
+      "android_app" => { "platform" => "android", "group" => nil, "min_version" => nil, "since" => nil, "grace" => 7,
+                         "recommended" => nil, "available" => nil, "store_url" => nil, "store_lookup" => false },
+      "ios_app" => { "platform" => "ios", "group" => nil, "min_version" => "2.0.0", "since" => "2026-12-01", "grace" => 14,
+                     "recommended" => "2.1.0", "available" => "2.1.0", "store_url" => "https://example.com/ios", "store_lookup" => true },
+      "kiosk_web" => { "platform" => "web", "group" => "kiosk", "min_version" => "1.0.0", "since" => "2026-11-01", "grace" => 7,
+                       "recommended" => nil, "available" => nil, "store_url" => nil, "store_lookup" => false }
+    )
+    expect(described_class.new.render).not_to include("9.9.9", "1.2.3", "IOS_APP_MIN_VERSION")
+    expect(described_class.read(described_class.new.render).version).to eq(2)
+  end
+
+  it "writes an empty clients object without a client registry" do
+    expect(manifest["clients"]).to eq({})
   end
 
   it "lists deprecated wires on tombstones" do
@@ -164,6 +191,15 @@ RSpec.describe StandardFlags::Tooling::Manifest do
       "a static number" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(serve: { "web" => { "w" => 1 } }) ]), /neither a boolean nor a string/ ],
       "a bad until" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(until: "soon") ]), /"soon" is not a YYYY-MM-DD calendar date/ ],
       "an until that isn't a calendar date" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(until: "2026-02-30") ]), /"2026-02-30" is not/ ],
+      "a version 2 manifest without clients" => [ '{"version":2,"audiences":{},"flags":[],"tombstones":[]}', /needs clients/ ],
+      "clients that aren't an object" => [ ManifestDocs.doc(clients: []), /clients is not an object/ ],
+      "a client missing a field" => [ ManifestDocs.doc(clients: { "a" => ManifestDocs.client.except("grace") }), /clients.a needs exactly/ ],
+      "a client with an extra field" => [ ManifestDocs.doc(clients: { "a" => ManifestDocs.client(pins: {}) }), /clients.a needs exactly/ ],
+      "a client without a platform" => [ ManifestDocs.doc(clients: { "a" => ManifestDocs.client(platform: "") }), /platform is not a string/ ],
+      "a client version that isn't a string" => [ ManifestDocs.doc(clients: { "a" => ManifestDocs.client(min_version: 4) }), /min_version is not a string or null/ ],
+      "a client since that isn't a calendar date" => [ ManifestDocs.doc(clients: { "a" => ManifestDocs.client(since: "2026-02-30") }), /since "2026-02-30"/ ],
+      "a client grace that isn't whole days" => [ ManifestDocs.doc(clients: { "a" => ManifestDocs.client(grace: 1.5) }), /grace is not a whole number/ ],
+      "a client store_lookup that isn't a boolean" => [ ManifestDocs.doc(clients: { "a" => ManifestDocs.client(store_lookup: {}) }), /store_lookup is not true or false/ ],
       "a removed that isn't a calendar date" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(removed: "2026-13-01") ]), /removed "2026-13-01"/ ]
     }.each do |label, (json, message)|
       it "refuses #{label}" do
@@ -183,12 +219,15 @@ RSpec.describe StandardFlags::Tooling::Manifest do
         "a wire listed twice in one list" => ManifestDocs.doc(flags: [ ManifestDocs.flag(audiences: { "web" => %w[a a] }) ]),
         "serve without until" => ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone.except("until") ]),
         "until without serve" => ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone.except("serve") ]),
+        "a client missing a field" => ManifestDocs.doc(clients: { "a" => ManifestDocs.client.except("grace") }),
+        "a client store_lookup that isn't a boolean" => ManifestDocs.doc(clients: { "a" => ManifestDocs.client(store_lookup: {}) }),
         "a wire on a flag and a tombstone" => ManifestDocs.doc(flags: [ ManifestDocs.flag ], tombstones: [ ManifestDocs.tombstone(serve: { "web" => { "a" => true } }) ])
       }
       refused.each do |label, json|
         expect(schema.valid?(JSON.parse(json))).to be(schema_blind.include?(label)), label
       end
-      expect(schema.valid?(JSON.parse(ManifestDocs.doc(flags: [ ManifestDocs.flag ], tombstones: [ ManifestDocs.tombstone ])))).to be(true)
+      expect(schema.valid?(JSON.parse(ManifestDocs.doc(flags: [ ManifestDocs.flag ], tombstones: [ ManifestDocs.tombstone ],
+                                                       clients: { "a" => ManifestDocs.client })))).to be(true)
       expect(described_class.read(ManifestDocs.doc(flags: [ ManifestDocs.flag ], tombstones: [ ManifestDocs.tombstone ])).wires.keys).to eq(%w[web])
     end
   end

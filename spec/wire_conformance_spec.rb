@@ -79,6 +79,7 @@ RSpec.describe "wire conformance fixtures" do
     end
     expect(statuses.uniq).to match_array(StandardFlags::ClientStatus::STATUSES)
   end
+
   describe "manifest_check.json" do
     fixture = ConformanceRegistry.load(ConformanceRegistry.path("wire/manifest_check.json"))
     schema = JSONSchemer.schema(Pathname.new(ConformanceRegistry.path("schema/manifest.schema.json")))

@@ -18,6 +18,17 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
     StandardFlags::Tooling::Manifest.new.render
   end
 
+  # The shipped registry plus whatever the block declares.
+  def declare_shipped(&extra)
+    declare do
+      kill_switch :ai_assistant, owner: "assistant", expose: { mobile: %i[chat chatEnabled], web: :assistant }
+      experiment :home_hero, owner: "growth", variants: %w[control savings], expose: { mobile: :homeHero }
+      tombstone :chat_v1, removed: "2026-12-01", serve: { mobile: { chat_v1: false } }, until: "2027-03-01"
+      tombstone :banner_v1, removed: "2026-06-01", serve: { web: { banner: true } }, until: "2026-12-31"
+      instance_eval(&extra)
+    end
+  end
+
   # The committed file doubles as the baseline unless a test says otherwise,
   # passed explicitly so the no-BASE warning stays out of the output.
   def check(committed:, base: committed, **options)
@@ -189,6 +200,7 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
     expect(result.changes).to eq([
       "~ version: 1 → 2 (regenerating upgrades the format)",
       "+ audiences",
+      "+ clients",
       "~ flag :ai_assistant",
       "- flag :gone_flag",
       "+ flag :home_hero",
@@ -344,6 +356,23 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
       "new wire mobile.chat_enabled and existing wire mobile.chatEnabled are both CHAT_ENABLED in generated Kotlin; " \
       "regenerate with the previous standard_flags:kotlin output in place so chatEnabled keeps CHAT_ENABLED, " \
       "and check which wire client code means"
+    ])
+  end
+
+  it "reports a changed client registry as stale, never as a contract break" do
+    with_client = declare_shipped { client :android_app, platform: :android, min_version: "0.4.0", since: "2026-12-01" }
+    declare_shipped do
+      client :android_app, platform: :android, min_version: "0.5.0", since: "2027-01-15"
+      client :ios_app, platform: :ios
+    end
+    result = check(committed: with_client).call
+
+    expect([ result.status, result.findings ]).to eq([ :stale, [] ])
+    expect(result.changes).to eq([
+      '~ clients.android_app: {"platform":"android","group":null,"min_version":"0.4.0","since":"2026-12-01","grace":7,' \
+      '"recommended":null,"available":null,"store_url":null,"store_lookup":false} → {"platform":"android","group":null,' \
+      '"min_version":"0.5.0","since":"2027-01-15","grace":7,"recommended":null,"available":null,"store_url":null,"store_lookup":false}',
+      "+ clients.ios_app"
     ])
   end
 

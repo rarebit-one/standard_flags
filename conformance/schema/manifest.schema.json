@@ -8,7 +8,8 @@
     "version",
     "audiences",
     "flags",
-    "tombstones"
+    "tombstones",
+    "clients"
   ],
   "properties": {
     "version": {
@@ -39,6 +40,12 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/tombstone"
+      }
+    },
+    "clients": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/client"
       }
     }
   },
@@ -264,6 +271,75 @@
         "until_clients": [
           "serve"
         ]
+      },
+      "additionalProperties": false
+    },
+    "client": {
+      "description": "A client registry entry as declared in code. ENV break-glass pins and store lookup answers never appear.",
+      "type": "object",
+      "required": [
+        "platform",
+        "group",
+        "min_version",
+        "since",
+        "grace",
+        "recommended",
+        "available",
+        "store_url",
+        "store_lookup"
+      ],
+      "properties": {
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "group": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "min_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "since": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grace": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "recommended": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "available": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "store_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "store_lookup": {
+          "type": "boolean"
+        }
       },
       "additionalProperties": false
     }

@@ -100,7 +100,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flag's `audiences` as `{ audience => [every wire name] }`, `min_client`
   (always present), `permanent` (kinds `flag` and `mode`), and `remove_by`
   and `final` when declared. Tombstones with deprecated wires carry `serve`,
-  `until` and `until_clients`. `owner:` and `description:` are deliberately
+  `until` and `until_clients`. A top-level `clients` object holds the client
+  registry as declared in code (platform, group, min_version, since, grace in
+  days, recommended, available, store_url, and whether a `store_lookup` is
+  configured); ENV pins and lookup answers never appear. `owner:` and `description:` are deliberately
   left out. The schema ships as `conformance/schema/manifest.schema.json`.
   `StandardFlags::Tooling::Manifest.read` reads version 1 and 2 files. It
   refuses what the schema rejects, plus a non-integer version, non-calendar
