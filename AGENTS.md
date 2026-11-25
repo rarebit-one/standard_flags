@@ -51,7 +51,9 @@ lib/standard_flags/
 ├── reader.rb / snapshot.rb         # Typed reads; frozen snapshot
 ├── evaluation.rb / reason.rb       # OpenFeature-shaped result, reasons, error codes
 ├── mode.rb / sensor.rb             # Mode value object; sensor helper
-├── payload.rb / bucket.rb          # Client payload + digest; bucketing contract
+├── payload.rb / bucket.rb          # Flat client payload + digest; bucketing contract
+├── delivery.rb / audience.rb       # OFREP entries + ETag for an audience; config.audiences
+├── ofrep.rb + ofrep/controller.rb  # OFREP request parsing; the endpoint mixin (autoloaded, actionpack)
 ├── memo.rb                         # Per-unit-of-work memo (executor hook)
 ├── reporting.rb                    # Rails.error + notifications, once per process
 ├── testing.rb / rspec.rb           # Test overrides; RSpec helpers for hosts
@@ -69,9 +71,10 @@ lib/standard_flags/
 └── engine.rb                       # Executor hook, registry loading, subscribers, rake tasks
 lib/tasks/standard_flags.rake
 lib/generators/standard_flags/install/    # install, migrations, admin (controller, routes, Inertia pages)
-spec/fixtures/conformance/          # Shared evaluation fixtures (language-neutral);
-                                    #   versions/version_ranges.json is the client-side range contract;
-                                    #   versions/legacy_ranges.json and "scope": "server" cases are Ruby-only
+conformance/                        # Shipped cross-language fixtures, tagged scope server|wire;
+                                    #   schema/fixture.schema.json, README.md; wire/ and versions/version_ranges.json
+                                    #   are what clients run; versions/legacy_ranges.json is Ruby-only
+spec/fixtures/ofrep/openapi.yaml    # Vendored OFREP OpenAPI document (responses validated against it)
 ```
 
 ## Key Rules

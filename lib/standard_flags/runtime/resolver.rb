@@ -14,7 +14,8 @@ module StandardFlags
     #      wins over any other (TARGETING_MATCH, "deny" / "allow");
     #   2. attached cohorts the unit belongs to; one serving the off value
     #      wins, else the first in declared order ("cohort:<key>");
-    #   3. segments, asked of `config.segment_resolver` ("segment:<name>");
+    #   3. segments, asked of `config.segment_resolver` ("segment:<name>"),
+    #      never for an AnonymousContext;
     #   4. client conditions (platforms, version and build ranges for the
     #      client's platform, all of which must hold); when unmet, skip
     #      straight to the fallthrough;
@@ -147,9 +148,11 @@ module StandardFlags
           end
         end
 
+        # Skipped for an anonymous (pre-authentication) context: the app's
+        # resolver may read whoever is signed in.
         def segments
           resolver = StandardFlags.config.segment_resolver
-          return unless resolver
+          return if resolver.nil? || context.anonymous?
 
           rule.segments.each do |segment|
             name = segment["name"].to_s

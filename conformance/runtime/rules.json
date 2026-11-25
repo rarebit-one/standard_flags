@@ -1,5 +1,7 @@
 {
   "description": "Runtime rules: a stored rule (plus cohorts and memberships) and a context in; value, variant, reason, error code and rule_id out. Rules use the standard_flags_rules column names, stored values are strings, and salts default to the flag key. Each case's rules, cohorts and memberships stand alone. context.units maps unit name to unit key; context.segments lists the segments the context belongs to. Bucket numbers in case names come from bucket_vectors.json's functions.",
+  "suite": "runtime",
+  "scope": "server",
   "registry": {
     "units": [
       "account"

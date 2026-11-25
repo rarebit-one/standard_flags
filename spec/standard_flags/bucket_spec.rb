@@ -1,6 +1,6 @@
 require "spec_helper"
 
-# Fixed vectors live in spec/fixtures/conformance/bucket_vectors.json.
+# Fixed vectors live in conformance/bucket_vectors.json.
 RSpec.describe StandardFlags::Bucket do
   it "implements v1 as SHA-256 of salt:unit_key" do
     expected = Digest::SHA256.hexdigest("new_checkout:acct_42")[0, 15].to_i(16) % 10_000

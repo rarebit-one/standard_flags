@@ -73,6 +73,7 @@ module StandardFlags
 
         snapshot = RuleSnapshot.build(store.load, revision: revision, checked_at: checked_at)
         Reporting.instrument(:runtime_refresh, revision: snapshot.revision, rules: snapshot.rules.size)
+        Runtime.warn_public_targeting(snapshot)
         snapshot
       rescue StandardError => e
         failed(current || RuleSnapshot.empty, checked_at, e)

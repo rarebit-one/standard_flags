@@ -35,6 +35,12 @@ module StandardFlags
     # name) unless `read_client_headers` is false; a platform outside
     # `client_platforms` is dropped.
     attr_accessor :client_headers, :client_platforms, :read_client_headers
+    # The client audiences this app serves (see StandardFlags::Audience):
+    # an Array of names, or a Hash of name => `{ public:, unit: }`. nil (the
+    # default) means every audience a flag exposes to, none of them public.
+    # When set, every `expose:` and tombstone `serve:` audience must be
+    # declared here, or the registry refuses to build.
+    attr_reader :audiences
     # Runtime rules (rules stored in the app's database, between the ENV pin
     # and the code default). Off by default; when off, nothing touches a
     # database and ActiveRecord is never loaded. Turn on only after running
@@ -102,6 +108,7 @@ module StandardFlags
       @client_headers = DEFAULT_CLIENT_HEADERS
       @client_platforms = DEFAULT_CLIENT_PLATFORMS
       @read_client_headers = true
+      @audiences = nil
       @runtime_rules = false
       @refresh_interval = 5
       @runtime_store = nil
@@ -132,6 +139,10 @@ module StandardFlags
     # Where ENV pins are read from. Anything that responds to `[]`.
     def env_source
       @env_source || ENV
+    end
+
+    def audiences=(value)
+      @audiences = Audience.normalize(value)
     end
 
     def error_reporter=(reporter)

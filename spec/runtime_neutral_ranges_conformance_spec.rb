@@ -30,7 +30,7 @@ RSpec.describe "runtime conformance fixtures with neutral version ranges" do
     end
   end
 
-  Dir[File.expand_path("fixtures/conformance/runtime/*.json", __dir__)].sort.each do |file|
+  Dir[ConformanceRegistry.path("runtime/*.json")].sort.each do |file|
     fixture = ConformanceRegistry.load(file)
     fixture.fetch("cases").each do |example|
       rules = example.fetch("rules", [])

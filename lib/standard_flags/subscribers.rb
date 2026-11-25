@@ -10,6 +10,7 @@ module StandardFlags
   # * forbidden.standard_flags    — a `forbidden_in` flag pinned on
   # * legacy_env.standard_flags   — a legacy env name in use
   # * runtime_refresh.standard_flags       — runtime rules reloaded
+  # * public_targeting.standard_flags      — a public-audience flag's rule has members or cohorts
   # * runtime_stale.standard_flags         — a runtime refresh failed; the
   #                                          last good rules keep serving
   # * rule_invalid.standard_flags          — a stored rule its flag can't serve

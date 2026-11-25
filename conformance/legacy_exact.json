@@ -1,5 +1,7 @@
 {
   "description": "legacy_parser: exact reads legacy env: names the way a hand-written ENV[\"X\"] == \"on\" reader did: no trimming or case folding, on only for a legacy_true value, any other value (including a set-but-blank one, unless inverted) pins off, and modes match a value exactly (blank is unset). The canonical STANDARD_FLAGS_<KEY> pin is always strict.",
+  "suite": "evaluation",
+  "scope": "server",
   "registry": {
     "flags": [
       { "kind": "flag", "key": "purge_inactive", "owner": "platform", "permanent": true,

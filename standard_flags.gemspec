@@ -18,7 +18,9 @@ Gem::Specification.new do |spec|
   spec.metadata["rubygems_mfa_required"] = "true"
 
   spec.files = Dir.chdir(File.expand_path(__dir__)) do
-    Dir["lib/**/*", "LICENSE", "Rakefile", "README.md", "CHANGELOG.md"]
+    # conformance/ is the cross-language contract (fixtures, their JSON
+    # Schema and README); it ships so other runners can read it from the gem.
+    Dir["lib/**/*", "conformance/**/*", "LICENSE", "Rakefile", "README.md", "CHANGELOG.md"]
   end
 
   spec.required_ruby_version = ">= 4.0"

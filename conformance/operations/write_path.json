@@ -1,5 +1,7 @@
 {
   "description": "The write path: operations applied in order to an empty store, then evaluations. Each step names an operation (snake_case: ramp, set_value, add_members, ...), its target (a flag key, or cohort:<key>), its arguments as stored strings, an optional expected_revision, and the failure code it must return when it is refused (\"fails\"). A set_value with a value on a draft rule (including the one it creates) starts it in the same write; every other operation leaves a draft a draft. Steps run as a system actor that the policy allows. Rules created by a step take the flag's bucketing:, so bucket numbers in case names are the v2 rollout bucket (see bucket_vectors.json).",
+  "suite": "operations",
+  "scope": "server",
   "registry": {
     "units": [
       "account"

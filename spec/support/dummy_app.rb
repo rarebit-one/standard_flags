@@ -37,6 +37,16 @@ Dummy::Application.routes.draw do
   get "/rescuing/disabled" => "rescuing#disabled"
   get "/rescuing/boom" => "rescuing#boom"
   get "/targeted/disabled" => "targeted#disabled"
+  post "/ofrep/v1/evaluate/flags" => "ofrep_flags#ofrep_evaluate_flags"
+  post "/ofrep/v1/evaluate/flags/:key" => "ofrep_flags#ofrep_evaluate_flag"
+  post "/api/ofrep/v1/evaluate/flags" => "ofrep_api#ofrep_evaluate_flags"
+  post "/api/ofrep/v1/evaluate/flags/:key" => "ofrep_api#ofrep_evaluate_flag"
+  post "/pre-auth/ofrep/v1/evaluate/flags" => "ofrep_pre_auth#ofrep_evaluate_flags"
+  post "/csrf/ofrep/v1/evaluate/flags" => "ofrep_csrf_protected#ofrep_evaluate_flags"
+  post "/late-csrf/ofrep/v1/evaluate/flags" => "ofrep_late_csrf#ofrep_evaluate_flags"
+  post "/rescuing/ofrep/v1/evaluate/flags" => "ofrep_rescuing#ofrep_evaluate_flags"
+  post "/pre-auth/ofrep/v1/evaluate/flags/:key" => "ofrep_pre_auth#ofrep_evaluate_flag"
+  get "/bootstrap" => "bootstrap#show"
 end
 
 require_relative "dummy_controllers"

@@ -5,14 +5,19 @@ module StandardFlags
   # The capability payload a client audience sees: `{ wire_name => value }`
   # for flags that declare `expose:` for that audience, and nothing else.
   # Unexposed keys never appear, and wire names are decoupled from keys so a
-  # renamed or removed flag doesn't break a shipped client.
+  # renamed or removed flag doesn't break a shipped client. Each alias of a
+  # flag carries the same value.
+  #
+  # This flat format is for pages the server renders (the Inertia prop): it
+  # applies neither `min_client:` nor tombstones' static wires. Clients with
+  # builds of their own use StandardFlags::Delivery (`format: :ofrep`).
   module Payload
     module_function
 
     def build(registry, audience, context)
       reader = Reader.new(registry, context)
-      registry.exposed(audience).to_h do |definition|
-        [ definition.wire_name(audience), wire_value(definition, reader.evaluate(definition.key)) ]
+      registry.wires(audience).to_h do |wire, definition|
+        [ wire, wire_value(definition, reader.evaluate(definition.key)) ]
       end
     end
 

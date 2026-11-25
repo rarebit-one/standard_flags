@@ -1,5 +1,7 @@
 {
   "description": "Legacy env names declared with env:, inversion of *_DISABLED names, and precedence of the canonical name.",
+  "suite": "evaluation",
+  "scope": "server",
   "registry": {
     "flags": [
       { "kind": "kill_switch", "key": "ai_assistant", "owner": "assistant", "env": "ACME_LEGACY_DISABLED", "inverted": true },

@@ -5,6 +5,10 @@ module StandardFlags
   # than misbehaving at read time.
   class DefinitionError < Error; end
 
+  # Raised for a setup that can't work as written, such as an OFREP
+  # controller with forgery protection and no `csrf:` choice.
+  class ConfigurationError < Error; end
+
   # Raised for an undeclared key when `config.strict` is on (the default
   # outside production). In production the read returns a fail-safe result
   # with reason ERROR and error code FLAG_NOT_FOUND instead.

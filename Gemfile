@@ -24,4 +24,7 @@ group :test do
   # The optional OpenFeature provider (require "standard_flags/open_feature").
   # Never a gemspec dependency: only hosts that use OpenFeature bring it.
   gem "openfeature-sdk", "~> 0.8", require: false
+  # Validates OFREP responses against the vendored OpenAPI document and the
+  # conformance fixtures against conformance/schema.
+  gem "json_schemer", "~> 2.4", require: false
 end

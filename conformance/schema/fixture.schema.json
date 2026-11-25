@@ -1,0 +1,1340 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/rarebit-one/standard_flags/main/conformance/schema/fixture.schema.json",
+  "title": "standard_flags conformance fixture",
+  "description": "Every file under conformance/ (except schema/) validates against this schema. `suite` picks the case shape; `scope` says who runs it: `server` cases (ENV pins, legacy variables, runtime rules, the write path, bucketing, RubyGems ranges) run only in server evaluators, `wire` cases also run in client libraries. A case may override its file's scope. Fixture format version 1.",
+  "type": "object",
+  "required": [
+    "description",
+    "suite",
+    "scope"
+  ],
+  "properties": {
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "suite": {
+      "enum": [
+        "evaluation",
+        "runtime",
+        "operations",
+        "bucket_vectors",
+        "version_ranges",
+        "legacy_ranges",
+        "delivery",
+        "client_state"
+      ]
+    },
+    "scope": {
+      "$ref": "#/$defs/scope"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "suite": {
+            "const": "evaluation"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/evaluation_suite"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "suite": {
+            "const": "runtime"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/runtime_suite"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "suite": {
+            "const": "operations"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/operations_suite"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "suite": {
+            "const": "bucket_vectors"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/bucket_vectors_suite"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "suite": {
+            "const": "version_ranges"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/version_ranges_suite"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "suite": {
+            "const": "legacy_ranges"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/legacy_ranges_suite"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "suite": {
+            "const": "delivery"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/delivery_suite"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "suite": {
+            "const": "client_state"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/client_state_suite"
+      }
+    }
+  ],
+  "$defs": {
+    "scope": {
+      "enum": [
+        "server",
+        "wire"
+      ]
+    },
+    "flag_key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "wire_name": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "flag_value": {
+      "type": [
+        "boolean",
+        "string",
+        "null"
+      ]
+    },
+    "env_vars": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "client": {
+      "description": "The calling client as given: platform, version, build.",
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "build": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "units": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "client": {
+          "$ref": "#/$defs/client"
+        },
+        "segments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "platform_versions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "flag": {
+      "type": "object",
+      "required": [
+        "kind",
+        "key",
+        "owner"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "flag",
+            "kill_switch",
+            "mode",
+            "experiment",
+            "compat"
+          ]
+        },
+        "key": {
+          "$ref": "#/$defs/flag_key"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "default": {},
+        "env": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "inverted": {
+          "type": "boolean"
+        },
+        "legacy_parser": {
+          "enum": [
+            "strict",
+            "exact"
+          ]
+        },
+        "legacy_true": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "forbidden_in": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "fail": {},
+        "expose": {
+          "description": "audience => wire name, or a list of wire names (aliases).",
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/wire_name"
+              },
+              {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "#/$defs/wire_name"
+                }
+              }
+            ]
+          }
+        },
+        "min_client": {
+          "$ref": "#/$defs/platform_versions"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "remove_by": {
+          "$ref": "#/$defs/date"
+        },
+        "final": {},
+        "permanent": {
+          "type": "boolean"
+        },
+        "bucketing": {
+          "type": "object",
+          "required": [
+            "version",
+            "salt"
+          ],
+          "properties": {
+            "version": {
+              "type": "integer"
+            },
+            "salt": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "preset": {
+          "enum": [
+            "sensor",
+            "cutover",
+            "shadow"
+          ]
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "variants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "tombstone": {
+      "type": "object",
+      "required": [
+        "key",
+        "removed"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/flag_key"
+        },
+        "removed": {
+          "$ref": "#/$defs/date"
+        },
+        "serve": {
+          "description": "audience => { wire name => static value }, served with reason STATIC.",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": {
+              "$ref": "#/$defs/wire_name"
+            },
+            "additionalProperties": {
+              "type": [
+                "boolean",
+                "string"
+              ]
+            }
+          }
+        },
+        "until": {
+          "$ref": "#/$defs/date"
+        },
+        "until_clients": {
+          "$ref": "#/$defs/platform_versions"
+        }
+      },
+      "additionalProperties": false
+    },
+    "registry": {
+      "type": "object",
+      "required": [
+        "flags"
+      ],
+      "properties": {
+        "units": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/flag"
+          }
+        },
+        "tombstones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tombstone"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "evaluation_expected": {
+      "type": "object",
+      "required": [
+        "value",
+        "variant",
+        "reason"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/flag_value"
+        },
+        "variant": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_env_var": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "rule": {
+      "type": "object",
+      "required": [
+        "key"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/flag_key"
+        },
+        "status": {
+          "type": "string"
+        },
+        "percentage_bps": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rollout_value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variant_weights": {
+          "type": "object"
+        },
+        "fallthrough_value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stop_value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "conditions": {
+          "description": "Any JSON: some cases store a malformed shape on purpose."
+        },
+        "cohorts": {},
+        "salt": {
+          "type": "string"
+        },
+        "hash_version": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cohort": {
+      "type": "object",
+      "required": [
+        "key",
+        "unit"
+      ],
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "membership": {
+      "type": "object",
+      "required": [
+        "unit",
+        "unit_key",
+        "value"
+      ],
+      "properties": {
+        "rule": {
+          "type": "string"
+        },
+        "cohort": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "unit_key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "stored_state": {
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rule"
+          }
+        },
+        "cohorts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/cohort"
+          }
+        },
+        "memberships": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/membership"
+          }
+        }
+      }
+    },
+    "evaluation_suite": {
+      "required": [
+        "registry",
+        "cases"
+      ],
+      "properties": {
+        "registry": {
+          "$ref": "#/$defs/registry"
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "flag",
+              "environment",
+              "expected"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "scope": {
+                "$ref": "#/$defs/scope"
+              },
+              "flag": {
+                "type": "string"
+              },
+              "environment": {
+                "type": "string"
+              },
+              "env_vars": {
+                "$ref": "#/$defs/env_vars"
+              },
+              "strict": {
+                "type": "boolean"
+              },
+              "expected": {
+                "$ref": "#/$defs/evaluation_expected"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "runtime_suite": {
+      "required": [
+        "registry",
+        "cases"
+      ],
+      "properties": {
+        "registry": {
+          "$ref": "#/$defs/registry"
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "flag",
+              "environment",
+              "expected"
+            ],
+            "allOf": [
+              {
+                "$ref": "#/$defs/stored_state"
+              }
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "scope": {
+                "$ref": "#/$defs/scope"
+              },
+              "flag": {
+                "type": "string"
+              },
+              "environment": {
+                "type": "string"
+              },
+              "env_vars": {
+                "$ref": "#/$defs/env_vars"
+              },
+              "context": {
+                "$ref": "#/$defs/context"
+              },
+              "rules": true,
+              "cohorts": true,
+              "memberships": true,
+              "expected": {
+                "$ref": "#/$defs/evaluation_expected"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "operations_suite": {
+      "required": [
+        "registry",
+        "cases"
+      ],
+      "properties": {
+        "registry": {
+          "$ref": "#/$defs/registry"
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "steps",
+              "checks"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "scope": {
+                "$ref": "#/$defs/scope"
+              },
+              "env_vars": {
+                "$ref": "#/$defs/env_vars"
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "op"
+                  ],
+                  "properties": {
+                    "op": {
+                      "type": "string"
+                    },
+                    "target": {
+                      "type": "string"
+                    },
+                    "args": {
+                      "type": "object"
+                    },
+                    "fails": {},
+                    "expected_revision": {
+                      "type": "integer"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "checks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "flag",
+                    "environment",
+                    "expected"
+                  ],
+                  "properties": {
+                    "flag": {
+                      "type": "string"
+                    },
+                    "environment": {
+                      "type": "string"
+                    },
+                    "context": {
+                      "$ref": "#/$defs/context"
+                    },
+                    "expected": {
+                      "$ref": "#/$defs/evaluation_expected"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "bucket_vectors_suite": {
+      "required": [
+        "vectors"
+      ],
+      "properties": {
+        "vectors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "version",
+              "salt",
+              "unit_key",
+              "bucket"
+            ],
+            "properties": {
+              "version": {
+                "enum": [
+                  1,
+                  2
+                ]
+              },
+              "decision": {
+                "type": "string"
+              },
+              "salt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "unit_key": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "bucket": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 9999
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "version_ranges_suite": {
+      "required": [
+        "cases",
+        "invalid_ranges"
+      ],
+      "properties": {
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "range",
+              "version",
+              "matched"
+            ],
+            "properties": {
+              "range": {
+                "type": "string"
+              },
+              "version": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "null: no client version."
+              },
+              "matched": {
+                "type": "boolean"
+              },
+              "server_matched": {
+                "type": "boolean",
+                "description": "What the Ruby server's read path gives, when it differs from matched (clients ignore it)."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "invalid_ranges": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "build_cases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "range",
+              "build",
+              "matched"
+            ],
+            "properties": {
+              "range": {
+                "type": "string"
+              },
+              "build": {
+                "type": [
+                  "string",
+                  "integer",
+                  "null"
+                ]
+              },
+              "matched": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "invalid_build_ranges": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ofrep_entry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "key",
+            "value",
+            "reason",
+            "variant"
+          ],
+          "properties": {
+            "key": {
+              "$ref": "#/$defs/wire_name"
+            },
+            "value": {
+              "type": [
+                "boolean",
+                "string"
+              ]
+            },
+            "reason": {
+              "enum": [
+                "STATIC",
+                "DEFAULT",
+                "TARGETING_MATCH",
+                "SPLIT",
+                "DISABLED",
+                "ENV_PIN",
+                "KILL_SWITCH"
+              ]
+            },
+            "variant": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "key",
+            "errorCode",
+            "errorDetails"
+          ],
+          "properties": {
+            "key": {
+              "$ref": "#/$defs/wire_name"
+            },
+            "errorCode": {
+              "enum": [
+                "PARSE_ERROR",
+                "TARGETING_KEY_MISSING",
+                "INVALID_CONTEXT",
+                "GENERAL"
+              ]
+            },
+            "errorDetails": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "delivery_suite": {
+      "required": [
+        "registry",
+        "cases",
+        "environment",
+        "today",
+        "never_on_wire"
+      ],
+      "properties": {
+        "registry": {
+          "$ref": "#/$defs/registry"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "today": {
+          "$ref": "#/$defs/date"
+        },
+        "never_on_wire": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "audience",
+              "expected"
+            ],
+            "allOf": [
+              {
+                "$ref": "#/$defs/stored_state"
+              }
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "scope": {
+                "$ref": "#/$defs/scope"
+              },
+              "audience": {
+                "type": "string"
+              },
+              "environment": {
+                "type": "string"
+              },
+              "today": {
+                "$ref": "#/$defs/date"
+              },
+              "env_vars": {
+                "$ref": "#/$defs/env_vars"
+              },
+              "context": {
+                "$ref": "#/$defs/context"
+              },
+              "rules": true,
+              "cohorts": true,
+              "memberships": true,
+              "etag_same_as": {
+                "type": "string"
+              },
+              "etag_differs_from": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "expected": {
+                "type": "object",
+                "required": [
+                  "flags",
+                  "etag"
+                ],
+                "properties": {
+                  "flags": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/ofrep_entry"
+                    }
+                  },
+                  "etag": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "declared_flag": {
+      "type": "object",
+      "required": [
+        "type",
+        "default"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "boolean",
+            "string"
+          ]
+        },
+        "default": {
+          "type": [
+            "boolean",
+            "string"
+          ]
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ceiling": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "type": {
+            "const": "boolean"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "default": {
+            "type": "boolean"
+          },
+          "values": false
+        }
+      },
+      "else": {
+        "properties": {
+          "default": {
+            "type": "string"
+          },
+          "ceiling": false
+        }
+      }
+    },
+    "read": {
+      "type": "object",
+      "required": [
+        "state",
+        "value",
+        "reason"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "on",
+            "off",
+            "loaded",
+            "not_loaded"
+          ]
+        },
+        "value": {
+          "type": [
+            "boolean",
+            "string"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "client_state_step": {
+      "type": "object",
+      "required": [
+        "expected"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "payload"
+          ]
+        },
+        {
+          "required": [
+            "raw"
+          ]
+        },
+        {
+          "required": [
+            "not_modified"
+          ]
+        }
+      ],
+      "properties": {
+        "payload": {},
+        "raw": {
+          "type": "string"
+        },
+        "not_modified": {
+          "const": true
+        },
+        "expected": {
+          "type": "object",
+          "required": [
+            "accepted",
+            "version",
+            "reads"
+          ],
+          "properties": {
+            "accepted": {
+              "type": "boolean"
+            },
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reads": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/read"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "client_state_suite": {
+      "required": [
+        "limits",
+        "declared",
+        "cases"
+      ],
+      "properties": {
+        "limits": {
+          "type": "object",
+          "required": [
+            "max_bytes",
+            "max_flags"
+          ],
+          "properties": {
+            "max_bytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_flags": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "declared": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/wire_name"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/declared_flag"
+          }
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "steps"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "scope": {
+                "$ref": "#/$defs/scope"
+              },
+              "declared": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/declared_flag"
+                }
+              },
+              "steps": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/client_state_step"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "legacy_ranges_suite": {
+      "description": "Server only: version ranges stored by 0.2.x in RubyGems syntax, as Gem::Requirement evaluates them.",
+      "required": [
+        "translations",
+        "cases"
+      ],
+      "properties": {
+        "translations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "range",
+              "neutral"
+            ],
+            "properties": {
+              "range": {
+                "type": "string"
+              },
+              "neutral": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "range",
+              "version",
+              "matched"
+            ],
+            "properties": {
+              "range": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "matched": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  }
+}

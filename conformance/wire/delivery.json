@@ -1,0 +1,1541 @@
+{
+  "description": "Delivery: a registry, a context (units, client) and stored rules in; the OFREP entries a client audience is told, and their ETag, out. Entries are ordered by key (the wire name). Every alias of a flag carries the same evaluation; a flag with min_client is withheld from a client on a listed platform below the minimum, on a listed platform with an unknown version, or with no platform; a tombstone's static wires are served (reason STATIC) through `until` (a UTC date) and to clients below `until_clients`, and to clients of unknown version or of a platform it doesn't list. An errored flag is an OFREP evaluationFailure. The etag is the SHA-256 (lowercase hex) of the RFC 8785 (JCS) canonical JSON (keys sorted, no whitespace, strings as raw UTF-8 with only the escapes JCS requires; no numbers occur) of {\"audience\": <audience>, \"flags\": <entries>}. etag_same_as / etag_differs_from name earlier cases. Servers produce these; clients can use each expected body as a golden OFREP payload. No case's payload may contain any string in never_on_wire.",
+  "suite": "delivery",
+  "scope": "wire",
+  "environment": "production",
+  "today": "2026-12-01",
+  "never_on_wire": [
+    "internal_only",
+    "new_checkout",
+    "strict_gates",
+    "home_hero",
+    "broken_flag",
+    "STANDARD_FLAGS_",
+    "ACME_AI_DISABLED",
+    "acct_a",
+    "acct_b",
+    "acct_c",
+    "rule_id",
+    "source_env_var",
+    "allow",
+    "fallthrough",
+    "kiosk_theme",
+    "banner_v1"
+  ],
+  "registry": {
+    "units": [
+      "account"
+    ],
+    "flags": [
+      {
+        "kind": "kill_switch",
+        "key": "ai",
+        "owner": "assistant",
+        "env": [
+          "ACME_AI_DISABLED"
+        ],
+        "inverted": true,
+        "expose": {
+          "mobile": [
+            "chat_enabled",
+            "insights_enabled"
+          ],
+          "web": "ai"
+        }
+      },
+      {
+        "kind": "flag",
+        "key": "new_checkout",
+        "owner": "payments",
+        "remove_by": "2027-01-01",
+        "final": true,
+        "unit": "account",
+        "expose": {
+          "mobile": "checkoutV2"
+        },
+        "min_client": {
+          "android": "0.4.0",
+          "ios": "0.4.0"
+        }
+      },
+      {
+        "kind": "mode",
+        "key": "strict_gates",
+        "owner": "platform",
+        "preset": "sensor",
+        "expose": {
+          "mobile": "gates"
+        }
+      },
+      {
+        "kind": "experiment",
+        "key": "home_hero",
+        "owner": "growth",
+        "variants": [
+          "control",
+          "savings"
+        ],
+        "unit": "account",
+        "expose": {
+          "mobile": "homeHero"
+        }
+      },
+      {
+        "kind": "flag",
+        "key": "broken_flag",
+        "owner": "platform",
+        "remove_by": "2027-01-01",
+        "final": true,
+        "expose": {
+          "mobile": "brokenFlag"
+        }
+      },
+      {
+        "kind": "flag",
+        "key": "internal_only",
+        "owner": "platform",
+        "remove_by": "2027-01-01",
+        "final": true,
+        "unit": "account"
+      },
+      {
+        "kind": "experiment",
+        "key": "kiosk_theme",
+        "owner": "growth",
+        "variants": [
+          "contrôle",
+          "café"
+        ],
+        "expose": {
+          "kiosk": "theme"
+        }
+      }
+    ],
+    "tombstones": [
+      {
+        "key": "chat_v1",
+        "removed": "2026-11-01",
+        "serve": {
+          "mobile": {
+            "chat_v1": false,
+            "chatMode": "legacy"
+          }
+        },
+        "until": "2027-03-01",
+        "until_clients": {
+          "android": "0.6.0"
+        }
+      },
+      {
+        "key": "old_banner",
+        "removed": "2026-01-01"
+      },
+      {
+        "key": "banner_v1",
+        "removed": "2026-11-01",
+        "serve": {
+          "kiosk": {
+            "bannerText": "Grüße   \u0001 \" / \\  – ok"
+          }
+        },
+        "until": "2027-03-01"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "a client that sends nothing gets aliases and static wires but no min_client flag",
+      "audience": "mobile",
+      "context": {
+        "units": {
+          "account": "acct_a"
+        },
+        "client": {}
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "8f2706a498ed2b077d8c6d99ca03cbc8bb0d03d160882c798e64271798fc217c"
+      }
+    },
+    {
+      "name": "an android build at the minimum gets the min_client flag",
+      "audience": "mobile",
+      "context": {
+        "units": {
+          "account": "acct_a"
+        },
+        "client": {
+          "platform": "android",
+          "version": "0.4.0"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "4b2eec86554cc58a8193f835194c8bf275384eaf4b9afa50aab1a960055dd564"
+      }
+    },
+    {
+      "name": "an older android build doesn't",
+      "audience": "mobile",
+      "context": {
+        "units": {
+          "account": "acct_a"
+        },
+        "client": {
+          "platform": "android",
+          "version": "0.3.9"
+        }
+      },
+      "etag_same_as": "a client that sends nothing gets aliases and static wires but no min_client flag",
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "8f2706a498ed2b077d8c6d99ca03cbc8bb0d03d160882c798e64271798fc217c"
+      }
+    },
+    {
+      "name": "a prerelease of the minimum is older than it",
+      "audience": "mobile",
+      "context": {
+        "client": {
+          "platform": "android",
+          "version": "0.4.0-rc.1"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "8f2706a498ed2b077d8c6d99ca03cbc8bb0d03d160882c798e64271798fc217c"
+      }
+    },
+    {
+      "name": "a listed platform with no version is an unknown build",
+      "audience": "mobile",
+      "context": {
+        "client": {
+          "platform": "android"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "8f2706a498ed2b077d8c6d99ca03cbc8bb0d03d160882c798e64271798fc217c"
+      }
+    },
+    {
+      "name": "a version that doesn't parse is an unknown build",
+      "audience": "mobile",
+      "context": {
+        "client": {
+          "platform": "ios",
+          "version": "four"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "8f2706a498ed2b077d8c6d99ca03cbc8bb0d03d160882c798e64271798fc217c"
+      }
+    },
+    {
+      "name": "a platform min_client doesn't list is unaffected",
+      "audience": "mobile",
+      "context": {
+        "client": {
+          "platform": "web"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "4b2eec86554cc58a8193f835194c8bf275384eaf4b9afa50aab1a960055dd564"
+      }
+    },
+    {
+      "name": "an unrecognised platform (stored as \"unknown\") is an unknown build",
+      "audience": "mobile",
+      "context": {
+        "client": {
+          "platform": "unknown",
+          "version": "9.0.0"
+        }
+      },
+      "etag_same_as": "a client that sends nothing gets aliases and static wires but no min_client flag",
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "8f2706a498ed2b077d8c6d99ca03cbc8bb0d03d160882c798e64271798fc217c"
+      }
+    },
+    {
+      "name": "a kill switch pinned off serves KILL_SWITCH on every alias",
+      "audience": "mobile",
+      "env_vars": {
+        "STANDARD_FLAGS_AI": "off"
+      },
+      "context": {
+        "client": {
+          "platform": "ios",
+          "version": "1.0.0"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": false,
+            "reason": "KILL_SWITCH",
+            "variant": "off"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": false,
+            "reason": "KILL_SWITCH",
+            "variant": "off"
+          }
+        ],
+        "etag": "4a6e43c57f6a9048be283fc2f566e1a2ed22f75d51580e1fbd9710b3d17d4966"
+      }
+    },
+    {
+      "name": "a legacy variable reads as KILL_SWITCH too, and its name never leaves",
+      "audience": "mobile",
+      "env_vars": {
+        "ACME_AI_DISABLED": "true"
+      },
+      "context": {
+        "client": {
+          "platform": "ios",
+          "version": "1.0.0"
+        }
+      },
+      "etag_same_as": "a kill switch pinned off serves KILL_SWITCH on every alias",
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": false,
+            "reason": "KILL_SWITCH",
+            "variant": "off"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": false,
+            "reason": "KILL_SWITCH",
+            "variant": "off"
+          }
+        ],
+        "etag": "4a6e43c57f6a9048be283fc2f566e1a2ed22f75d51580e1fbd9710b3d17d4966"
+      }
+    },
+    {
+      "name": "an ENV pin serves ENV_PIN",
+      "audience": "mobile",
+      "env_vars": {
+        "STANDARD_FLAGS_STRICT_GATES": "on"
+      },
+      "context": {
+        "client": {
+          "platform": "ios",
+          "version": "1.0.0"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "on",
+            "reason": "ENV_PIN",
+            "variant": "on"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "452f76c68a7ca41ad055a6457124cca53d9792b2d41e227c6473b4fc3b742da9"
+      }
+    },
+    {
+      "name": "static wires stop at until_clients for that platform",
+      "audience": "mobile",
+      "context": {
+        "client": {
+          "platform": "android",
+          "version": "0.6.0"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "5998d5080309e329cf49fa7d89ac90e13c26159d1457045cf2167b3bee0fa6d1"
+      }
+    },
+    {
+      "name": "static wires keep serving a platform until_clients doesn't list",
+      "audience": "mobile",
+      "context": {
+        "client": {
+          "platform": "ios",
+          "version": "9.0.0"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "4b2eec86554cc58a8193f835194c8bf275384eaf4b9afa50aab1a960055dd564"
+      }
+    },
+    {
+      "name": "static wires are served through until",
+      "audience": "mobile",
+      "today": "2027-03-01",
+      "context": {
+        "client": {
+          "platform": "ios",
+          "version": "1.0.0"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "4b2eec86554cc58a8193f835194c8bf275384eaf4b9afa50aab1a960055dd564"
+      }
+    },
+    {
+      "name": "static wires are gone the day after until",
+      "audience": "mobile",
+      "today": "2027-03-02",
+      "context": {
+        "client": {
+          "platform": "ios",
+          "version": "1.0.0"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "5998d5080309e329cf49fa7d89ac90e13c26159d1457045cf2167b3bee0fa6d1"
+      }
+    },
+    {
+      "name": "an errored flag is an evaluationFailure and the rest still evaluate",
+      "audience": "mobile",
+      "context": {
+        "client": {
+          "platform": "ios",
+          "version": "1.0.0"
+        }
+      },
+      "rules": [
+        {
+          "key": "broken_flag",
+          "status": "running",
+          "fallthrough_value": "maybe"
+        }
+      ],
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "errorCode": "PARSE_ERROR",
+            "errorDetails": "the flag could not be evaluated; use the code default"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "8441ee3acf67b97d6b19c10349bd92eaa8d7174000d2c416a66df055c8251596"
+      }
+    },
+    {
+      "name": "a variant split serves SPLIT",
+      "audience": "mobile",
+      "context": {
+        "units": {
+          "account": "acct_a"
+        },
+        "client": {
+          "platform": "ios",
+          "version": "1.0.0"
+        }
+      },
+      "rules": [
+        {
+          "key": "home_hero",
+          "status": "running",
+          "variant_weights": {
+            "control": 0,
+            "savings": 10000
+          }
+        }
+      ],
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "savings",
+            "reason": "SPLIT",
+            "variant": "savings"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "f994141d0d0cbcd74ba19e8f5bf0cc673c66488fb28f61b1f36e460e191d5a8f"
+      }
+    },
+    {
+      "name": "user A, a member of the rule, gets TARGETING_MATCH",
+      "audience": "mobile",
+      "context": {
+        "units": {
+          "account": "acct_a"
+        },
+        "client": {
+          "platform": "android",
+          "version": "1.0.0"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running"
+        }
+      ],
+      "memberships": [
+        {
+          "rule": "new_checkout",
+          "unit": "account",
+          "unit_key": "acct_a",
+          "value": "on"
+        }
+      ],
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "checkoutV2",
+            "value": true,
+            "reason": "TARGETING_MATCH",
+            "variant": "on"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "f9bb90225cc20c97de6894c1adbd16938a378903c5ca6243e519935a8a2d54db"
+      }
+    },
+    {
+      "name": "user B on the same client gets other answers and another ETag",
+      "audience": "mobile",
+      "context": {
+        "units": {
+          "account": "acct_b"
+        },
+        "client": {
+          "platform": "android",
+          "version": "1.0.0"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running"
+        }
+      ],
+      "memberships": [
+        {
+          "rule": "new_checkout",
+          "unit": "account",
+          "unit_key": "acct_a",
+          "value": "on"
+        }
+      ],
+      "etag_differs_from": [
+        "user A, a member of the rule, gets TARGETING_MATCH"
+      ],
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "5998d5080309e329cf49fa7d89ac90e13c26159d1457045cf2167b3bee0fa6d1"
+      }
+    },
+    {
+      "name": "user C with the same answers as user B has the same ETag",
+      "audience": "mobile",
+      "context": {
+        "units": {
+          "account": "acct_c"
+        },
+        "client": {
+          "platform": "android",
+          "version": "1.0.0"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running"
+        }
+      ],
+      "memberships": [
+        {
+          "rule": "new_checkout",
+          "unit": "account",
+          "unit_key": "acct_a",
+          "value": "on"
+        }
+      ],
+      "etag_same_as": "user B on the same client gets other answers and another ETag",
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "checkoutV2",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "5998d5080309e329cf49fa7d89ac90e13c26159d1457045cf2167b3bee0fa6d1"
+      }
+    },
+    {
+      "name": "user B on an older build gets another ETag",
+      "audience": "mobile",
+      "context": {
+        "units": {
+          "account": "acct_b"
+        },
+        "client": {
+          "platform": "android",
+          "version": "0.3.0"
+        }
+      },
+      "rules": [
+        {
+          "key": "new_checkout",
+          "status": "running"
+        }
+      ],
+      "memberships": [
+        {
+          "rule": "new_checkout",
+          "unit": "account",
+          "unit_key": "acct_a",
+          "value": "on"
+        }
+      ],
+      "etag_differs_from": [
+        "user B on the same client gets other answers and another ETag"
+      ],
+      "expected": {
+        "flags": [
+          {
+            "key": "brokenFlag",
+            "value": false,
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "chatMode",
+            "value": "legacy",
+            "reason": "STATIC",
+            "variant": "legacy"
+          },
+          {
+            "key": "chat_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          },
+          {
+            "key": "chat_v1",
+            "value": false,
+            "reason": "STATIC",
+            "variant": "off"
+          },
+          {
+            "key": "gates",
+            "value": "off",
+            "reason": "DEFAULT",
+            "variant": "off"
+          },
+          {
+            "key": "homeHero",
+            "value": "control",
+            "reason": "DEFAULT",
+            "variant": "control"
+          },
+          {
+            "key": "insights_enabled",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "8f2706a498ed2b077d8c6d99ca03cbc8bb0d03d160882c798e64271798fc217c"
+      }
+    },
+    {
+      "name": "the web audience sees only its own wire names",
+      "audience": "web",
+      "context": {
+        "client": {
+          "platform": "web"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "ai",
+            "value": true,
+            "reason": "DEFAULT",
+            "variant": "on"
+          }
+        ],
+        "etag": "0c3424e5d2f22fff4dde0fd3fae946ede76349591eba28e16f7b51295fae78a6"
+      }
+    },
+    {
+      "name": "an audience nothing exposes to is empty",
+      "audience": "device",
+      "context": {
+        "client": {
+          "platform": "android",
+          "version": "1.0.0"
+        }
+      },
+      "expected": {
+        "flags": [],
+        "etag": "1781c217b9f951e02bf72944c316a4b15ebe46cd716ae064ed535e6334963763"
+      }
+    },
+    {
+      "name": "non-ASCII and control characters are hashed as RFC 8785 writes them (raw UTF-8; \\u0001 escaped in lowercase hex; U+2028, DEL and / left raw)",
+      "audience": "kiosk",
+      "context": {
+        "client": {
+          "platform": "ios",
+          "version": "1.0.0"
+        }
+      },
+      "expected": {
+        "flags": [
+          {
+            "key": "bannerText",
+            "value": "Grüße   \u0001 \" / \\  – ok",
+            "reason": "STATIC",
+            "variant": "Grüße   \u0001 \" / \\  – ok"
+          },
+          {
+            "key": "theme",
+            "value": "contrôle",
+            "reason": "DEFAULT",
+            "variant": "contrôle"
+          }
+        ],
+        "etag": "685dcdadc6ad8a840d7d73ce4c7aef2f885590541be03d58c253000b9ea9e484"
+      }
+    }
+  ]
+}

@@ -1,11 +1,11 @@
 require "spec_helper"
 
-# Runs every case in spec/fixtures/conformance/operations: operations applied
+# Runs every case in conformance/operations: operations applied
 # in order to an empty store, then evaluations. Like the other conformance
 # fixtures, these are meant to hold for every implementation of the write
 # path and evaluator.
 RSpec.describe "write-path conformance fixtures" do
-  fixtures = Dir[File.expand_path("fixtures/conformance/operations/*.json", __dir__)].sort
+  fixtures = Dir[ConformanceRegistry.path("operations/*.json")].sort
   actor = StandardFlags::Actor.system("conformance")
 
   it "has fixture files" do
