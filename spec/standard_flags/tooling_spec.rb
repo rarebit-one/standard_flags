@@ -144,6 +144,7 @@ RSpec.describe StandardFlags::Tooling do
         export type MobileWire = "chat";
         export type WebWire = "assistant" | "strictGates";
 
+        // Every audience the manifest lists, so it may name audiences FeaturesByAudience doesn't.
         export type WiresByAudience = {
           readonly mobile: MobileWire;
           readonly web: WebWire;
@@ -180,6 +181,7 @@ RSpec.describe StandardFlags::Tooling do
         export type MobileWire = "chat" | "chatEnabled" | "chat_v1";
         export type WebWire = "homeHero";
 
+        // Every audience the manifest lists, so it may name audiences FeaturesByAudience doesn't.
         export type WiresByAudience = {
           readonly kiosk: KioskWire;
           readonly mobile: MobileWire;

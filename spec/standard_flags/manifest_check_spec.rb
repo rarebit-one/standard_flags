@@ -18,10 +18,11 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
     StandardFlags::Tooling::Manifest.new.render
   end
 
-  def check(committed:, **options)
-    described_class.new(committed: committed, today: today, **options)
+  # The committed file doubles as the baseline unless a test says otherwise,
+  # passed explicitly so the no-BASE warning stays out of the output.
+  def check(committed:, base: committed, **options)
+    described_class.new(committed: committed, base: base, today: today, **options)
   end
-
 
   it "passes when the committed manifest matches the registry" do
     result = check(committed: shipped).call
@@ -32,9 +33,9 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
   end
 
   it "reports a missing manifest as stale (exit 1)" do
-    result = check(committed: nil).call
+    result = check(committed: nil, base: shipped).call
     expect([ result.status, result.exit_code ]).to eq([ :missing, 1 ])
-    expect(check(committed: nil).render(result, path: "config/flags.manifest.json")).to eq(<<~TEXT.chomp)
+    expect(check(committed: nil, base: shipped).render(result, path: "config/flags.manifest.json")).to eq(<<~TEXT.chomp)
       standard_flags:manifest:check: config/flags.manifest.json does not exist
       Run bin/rails standard_flags:manifest and commit the result.
     TEXT
@@ -196,18 +197,118 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
     ])
   end
 
-  it "skips the contract check against a base that doesn't exist yet" do
-    result = check(committed: shipped, base: nil).call
-    expect(result.status).to eq(:ok)
+  describe "the baseline" do
+    let(:regenerated) do
+      declare do
+        kill_switch :ai_assistant, owner: "assistant", expose: { mobile: :chatEnabled, web: :assistant }
+        experiment :home_hero, owner: "growth", variants: %w[control savings], expose: { mobile: :homeHero }
+        tombstone :chat_v1, removed: "2026-12-01", serve: { mobile: { chat_v1: false } }, until: "2027-03-01"
+        tombstone :banner_v1, removed: "2026-06-01", serve: { web: { banner: true } }, until: "2026-12-31"
+      end
+    end
+
+    it "warns loudly when there is none and the committed file stands in for it" do
+      subject = described_class.new(committed: regenerated, today: today)
+      result = subject.call
+
+      expect([ result.status, result.warnings ]).to eq([ :ok, [ described_class::NO_BASE_WARNING ] ])
+      expect(subject.render(result, path: "config/flags.manifest.json")).to eq(<<~TEXT.chomp)
+        standard_flags:manifest:check OK: config/flags.manifest.json matches the registry
+        standard_flags:manifest:check: warning: #{described_class::NO_BASE_WARNING}
+      TEXT
+    end
+
+    it "fails (exit 2) when a given baseline is unavailable, without regenerate advice" do
+      [ nil, described_class::Unavailable.new("BASE tmp/base.json does not exist") ].each do |base|
+        subject = check(committed: regenerated, base: base)
+        result = subject.call
+
+        expect([ result.status, result.exit_code, result.findings ]).to eq([ :baseline_unavailable, 2, [] ])
+        expect(subject.render(result)).to eq(
+          "standard_flags:manifest:check: the baseline manifest is unavailable (#{base ? base.reason : 'no baseline was given'}). " \
+          "The removed-wire and type checks need it; set BASE_OPTIONAL=1 only when the base branch has no manifest yet."
+        )
+      end
+    end
+
+    it "skips the contract checks with a warning when the baseline is optional" do
+      result = check(committed: regenerated, base: described_class::Unavailable.new("BASE x does not exist"), base_optional: true).call
+
+      expect([ result.status, result.findings ]).to eq([ :ok, [] ])
+      expect(result.warnings).to eq([ "no baseline (BASE x does not exist; BASE_OPTIONAL): the removed-wire and type checks were skipped" ])
+    end
+
+    it "still names dropped wires when the committed file is missing" do
+      declare do
+        experiment :home_hero, owner: "growth", variants: %w[control savings], expose: { mobile: :homeHero }
+        tombstone :chat_v1, removed: "2026-12-01", serve: { mobile: { chat_v1: false } }, until: "2027-03-01"
+      end
+      subject = check(committed: nil, base: shipped)
+      result = subject.call
+
+      expect([ result.status, result.exit_code ]).to eq([ :breaking, 2 ])
+      expect(result.removed_wires.map(&:to_s).size).to eq(3)
+      expect(subject.render(result, path: "config/flags.manifest.json").lines.map(&:chomp)).to include(
+        "standard_flags:manifest:check: config/flags.manifest.json does not exist",
+        "Run bin/rails standard_flags:manifest and commit the result."
+      )
+    end
   end
 
-  it "reports an unreadable manifest (exit 2)" do
-    subject = check(committed: "{not json")
+  it "reports an unreadable manifest (exit 2), and which one" do
+    subject = check(committed: "{not json", base: shipped)
     result = subject.call
 
-    expect([ result.status, result.exit_code, result.error ]).to match([ :unreadable, 2, /not valid JSON/ ])
-    expect(subject.render(result)).to start_with("standard_flags:manifest:check: can't read a manifest: the manifest is not valid JSON")
-    expect(check(committed: shipped, base: '{"version":9}').call.error).to eq("unknown manifest version 9 (this gem reads 1 and 2)")
+    expect([ result.status, result.exit_code, result.error_source, result.error ]).to match([ :unreadable, 2, :committed, /not valid JSON/ ])
+    expect(subject.render(result)).to eq(<<~TEXT.chomp)
+      standard_flags:manifest:check: can't read the committed manifest: #{result.error}
+      Run bin/rails standard_flags:manifest and commit the result.
+    TEXT
+
+    base = check(committed: shipped, base: '{"version":9}')
+    result = base.call
+    expect([ result.error_source, result.error ]).to eq([ :base, "unknown manifest version 9 (this gem reads 1 and 2)" ])
+    expect(base.render(result)).not_to include("Run bin/rails")
+  end
+
+  it "treats a public audience made private, while it served wires, as breaking" do
+    StandardFlags.config.audiences = { mobile: {}, pre_auth: { public: true } }
+    base = declare do
+      kill_switch :ai_assistant, owner: "assistant", expose: { pre_auth: :chat }
+      tombstone :old, removed: "2026-01-01", serve: { mobile: { old: true } }, until: "2026-06-01"
+    end
+    StandardFlags.config.audiences = { mobile: {}, pre_auth: {} }
+    declare { kill_switch :ai_assistant, owner: "assistant", expose: { pre_auth: :chat } }
+    result = check(committed: base).call
+
+    expect([ result.status, result.audiences_made_private.map(&:to_h) ]).to eq([ :breaking, [ { "audience" => "pre_auth" } ] ])
+    expect(result.audiences_made_private.first.detail).to start_with("audience made private: pre_auth was public, so clients before sign-in lose its 1 wire;")
+
+    StandardFlags.config.audiences = { mobile: {}, pre_auth: { public: true } }
+    empty = declare { kill_switch :ai_assistant, owner: "assistant", expose: { mobile: :chat } }
+    StandardFlags.config.audiences = { mobile: {}, pre_auth: {} }
+    declare { kill_switch :ai_assistant, owner: "assistant", expose: { mobile: :chat } }
+    expect(check(committed: empty).call.audiences_made_private).to eq([])
+  end
+
+  it "warns, without failing, when a deprecated wire's until moves earlier" do
+    declare do
+      kill_switch :ai_assistant, owner: "assistant", expose: { mobile: %i[chat chatEnabled], web: :assistant }
+      experiment :home_hero, owner: "growth", variants: %w[control savings], expose: { mobile: :homeHero }
+      tombstone :chat_v1, removed: "2026-12-01", serve: { mobile: { chat_v1: false } }, until: "2027-02-01"
+      tombstone :banner_v1, removed: "2026-06-01", serve: { web: { banner: true } }, until: "2026-12-31"
+    end
+    result = check(committed: shipped).call
+
+    expect([ result.status, result.findings ]).to eq([ :stale, [] ])
+    expect(result.warnings).to eq([ "tombstone :chat_v1 now serves mobile.chat_v1 through 2027-02-01, earlier than the 2027-03-01 shipped clients were promised" ])
+  end
+
+  it "ignores CRLF line endings and trailing newlines, but not other formatting" do
+    expect(check(committed: shipped.gsub("\n", "\r\n")).call.status).to eq(:ok)
+    expect(check(committed: "#{shipped}\n\n").call.status).to eq(:ok)
+    expect(check(committed: shipped.chomp).call.status).to eq(:ok)
+    expect(check(committed: shipped.sub("{\n", "{ \n")).call.status).to eq(:stale)
   end
 
   describe ".changes" do
@@ -233,10 +334,12 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
     after do
       FileUtils.rm_rf(root)
       ENV.delete("BASE")
+      ENV.delete("BASE_OPTIONAL")
     end
 
-    def run(base: nil)
+    def run(base: nil, optional: false)
       ENV["BASE"] = base if base
+      ENV["BASE_OPTIONAL"] = "1" if optional
       RakeTasks.invoke("standard_flags:manifest:check")
       0
     rescue SystemExit => e
@@ -251,9 +354,12 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
       expect { expect(run).to eq(1) }.to output(/does not exist/).to_stderr
     end
 
-    it "exits 0 when the committed manifest is current" do
+    it "exits 0 when the committed manifest is current, warning when no BASE was given" do
       write_manifest
-      expect { expect(run).to eq(0) }.to output(%r{OK: config/flags.manifest.json matches the registry}).to_stdout
+      expect { expect(run).to eq(0) }
+        .to output(%r{OK: config/flags.manifest.json matches the registry\n.*warning: no BASE was given}).to_stdout
+      FileUtils.cp(root.join("config/flags.manifest.json"), root.join("base.json"))
+      expect { expect(run(base: root.join("base.json").to_s)).to eq(0) }.not_to output(/warning/).to_stdout
     end
 
     it "exits 1 when the committed manifest is stale" do
@@ -262,11 +368,24 @@ RSpec.describe StandardFlags::Tooling::ManifestCheck do
       expect { expect(run).to eq(1) }.to output(/is stale/).to_stderr
     end
 
-    it "exits 2 on a wire BASE told a client that is gone, and checks only staleness when BASE doesn't exist" do
+    it "exits 2 on a wire BASE told a client that is gone" do
       write_manifest
       File.write(root.join("base.json"), shipped.sub('"chatEnabled"', %("chatEnabled",\n          "legacyChat")))
       expect { expect(run(base: root.join("base.json").to_s)).to eq(2) }.to output(/removed wire: mobile.legacyChat/).to_stderr
-      expect { expect(run(base: root.join("missing.json").to_s)).to eq(0) }.to output(/OK/).to_stdout
+    end
+
+    it "exits 2 when BASE is missing or a directory" do
+      write_manifest
+      missing = root.join("missing.json").to_s
+      expect { expect(run(base: missing)).to eq(2) }.to output(/baseline manifest is unavailable \(BASE #{missing} does not exist\)/).to_stderr
+      expect { expect(run(base: root.to_s)).to eq(2) }.to output(/BASE #{root} is a directory/).to_stderr
+    end
+
+    it "skips the contract checks, with a warning, when BASE is missing and BASE_OPTIONAL=1" do
+      write_manifest
+      missing = root.join("missing.json").to_s
+      expect { expect(run(base: missing, optional: true)).to eq(0) }
+        .to output(/OK.*\n.*warning: no baseline \(BASE #{missing} does not exist; BASE_OPTIONAL\)/).to_stdout
     end
 
     it "writes the Kotlin file" do

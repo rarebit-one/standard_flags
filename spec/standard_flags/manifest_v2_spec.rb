@@ -79,6 +79,11 @@ RSpec.describe StandardFlags::Tooling::Manifest do
     expect(schema.valid?(manifest.merge("flags" => [ flags["ai_assistant"].merge("owner" => "x") ]))).to be(false)
   end
 
+  it "spells out JSON.pretty_generate's layout, so the bytes don't hang on the json gem's defaults" do
+    expect(described_class.new.render).to eq("#{JSON.pretty_generate(manifest)}\n")
+    expect(described_class::FORMAT).to eq(indent: "  ", space: " ", object_nl: "\n", array_nl: "\n")
+  end
+
   it "renders deterministic JSON and digests its bytes" do
     render = described_class.new.render
     expect(render).to eq(described_class.new.render).and(end_with("}\n"))
@@ -132,20 +137,59 @@ RSpec.describe StandardFlags::Tooling::Manifest do
       "not an object" => [ "[]", /not a JSON object/ ],
       "an unknown version" => [ '{"version":3}', /unknown manifest version 3/ ],
       "no version" => [ "{}", /unknown manifest version nil/ ],
-      "flags not an array" => [ '{"version":2,"flags":{}}', /flags is not an array/ ],
-      "a flag that isn't an object" => [ '{"version":2,"flags":[1]}', /not an object/ ],
-      "a flag without a key" => [ '{"version":2,"flags":[{}]}', /no key/ ],
-      "an unknown type" => [ '{"version":2,"flags":[{"key":"a","type":"number"}]}', /unknown type "number"/ ],
-      "audiences not an object" => [ '{"version":2,"flags":[{"key":"a","type":"boolean","audiences":[]}]}', /audiences is not an object/ ],
-      "a wire that isn't a string" => [ '{"version":2,"flags":[{"key":"a","type":"boolean","audiences":{"web":[1]}}]}', /not a string/ ],
-      "serve not an object" => [ '{"version":2,"tombstones":[{"key":"t","serve":[]}]}', /serve is not an object/ ],
-      "serve audience not an object" => [ '{"version":2,"tombstones":[{"key":"t","serve":{"web":1}}]}', /serve.web is not an object/ ],
-      "a static number" => [ '{"version":2,"tombstones":[{"key":"t","until":"2027-01-01","serve":{"web":{"w":1}}}]}', /neither a boolean nor a string/ ],
-      "a bad until" => [ '{"version":2,"tombstones":[{"key":"t","until":"soon","serve":{"web":{"w":true}}}]}', /"soon" is not a YYYY-MM-DD date/ ]
+      "a version written as 2.0" => [ '{"version":2.0,"audiences":{},"flags":[],"tombstones":[]}', /unknown manifest version 2.0/ ],
+      "a version 2 manifest without audiences" => [ '{"version":2,"flags":[],"tombstones":[]}', /needs audiences/ ],
+      "audiences without public" => [ ManifestDocs.doc(audiences: { "web" => {} }), /audiences.web needs "public"/ ],
+      "flags not an array" => [ ManifestDocs.doc(flags: {}), /flags is not an array/ ],
+      "a flag that isn't an object" => [ ManifestDocs.doc(flags: [ 1 ]), /not an object/ ],
+      "a flag without a key" => [ ManifestDocs.doc(flags: [ {} ]), /no key/ ],
+      "an unknown type" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag(type: "number") ]), /unknown type "number"/ ],
+      "a missing type" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag.except("type") ]), /unknown type nil/ ],
+      "values of the wrong type" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag(values: %w[on off]) ]), /two unique boolean values/ ],
+      "duplicate values" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag(type: "string", "values" => %w[a a], "default" => "a") ]), /two unique string values/ ],
+      "a default of the wrong type" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag(default: { "*" => "off" }) ]), /default is not a boolean/ ],
+      "a final of the wrong type" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag(final: "on") ]), /final is not a boolean/ ],
+      "audiences not an object" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag(audiences: []) ]), /audiences is not an object/ ],
+      "a bare-string wire list" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag(audiences: { "web" => "a" }) ]), /audiences.web is not a non-empty array/ ],
+      "a wire that isn't a string" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag(audiences: { "web" => [ 1 ] }) ]), /not a string/ ],
+      "a wire listed twice in one list" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag(audiences: { "web" => %w[a a] }) ]), /web.a is listed twice/ ],
+      "a wire on two flags" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag, ManifestDocs.flag(key: "b") ]), /web.a is listed twice \(flag b\)/ ],
+      "a wire on a flag and a tombstone" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag ], tombstones: [ ManifestDocs.tombstone(serve: { "web" => { "a" => true } }) ]),
+                                             /web.a is listed twice \(tombstone t\)/ ],
+      "serve not an object" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(serve: []) ]), /serve is not a non-empty object/ ],
+      "an empty serve" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(serve: {}) ]), /serve is not a non-empty object/ ],
+      "serve without until" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone.except("until") ]), /serve needs until/ ],
+      "until without serve" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone.except("serve") ]), /until or until_clients without serve/ ],
+      "serve audience not an object" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(serve: { "web" => 1 }) ]), /serve.web is not an object/ ],
+      "a static number" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(serve: { "web" => { "w" => 1 } }) ]), /neither a boolean nor a string/ ],
+      "a bad until" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(until: "soon") ]), /"soon" is not a YYYY-MM-DD calendar date/ ],
+      "an until that isn't a calendar date" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(until: "2026-02-30") ]), /"2026-02-30" is not/ ],
+      "a removed that isn't a calendar date" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(removed: "2026-13-01") ]), /removed "2026-13-01"/ ]
     }.each do |label, (json, message)|
       it "refuses #{label}" do
         expect { described_class.read(json) }.to raise_error(described_class::Unreadable, message)
       end
+    end
+
+    it "agrees with manifest.schema.json on what it refuses, except where a schema can't say" do
+      schema = JSONSchemer.schema(Pathname.new(ConformanceRegistry.path("schema/manifest.schema.json")))
+      schema_blind = [ "a version written as 2.0", "a wire on two flags", "a wire on a flag and a tombstone",
+                       "an until that isn't a calendar date", "a removed that isn't a calendar date" ].freeze
+      refused = {
+        "a missing type" => ManifestDocs.doc(flags: [ ManifestDocs.flag.except("type") ]),
+        "values of the wrong type" => ManifestDocs.doc(flags: [ ManifestDocs.flag(values: %w[on off]) ]),
+        "a default of the wrong type" => ManifestDocs.doc(flags: [ ManifestDocs.flag(default: { "*" => "off" }) ]),
+        "a bare-string wire list" => ManifestDocs.doc(flags: [ ManifestDocs.flag(audiences: { "web" => "a" }) ]),
+        "a wire listed twice in one list" => ManifestDocs.doc(flags: [ ManifestDocs.flag(audiences: { "web" => %w[a a] }) ]),
+        "serve without until" => ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone.except("until") ]),
+        "until without serve" => ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone.except("serve") ]),
+        "a wire on a flag and a tombstone" => ManifestDocs.doc(flags: [ ManifestDocs.flag ], tombstones: [ ManifestDocs.tombstone(serve: { "web" => { "a" => true } }) ])
+      }
+      refused.each do |label, json|
+        expect(schema.valid?(JSON.parse(json))).to be(schema_blind.include?(label)), label
+      end
+      expect(schema.valid?(JSON.parse(ManifestDocs.doc(flags: [ ManifestDocs.flag ], tombstones: [ ManifestDocs.tombstone ])))).to be(true)
+      expect(described_class.read(ManifestDocs.doc(flags: [ ManifestDocs.flag ], tombstones: [ ManifestDocs.tombstone ])).wires.keys).to eq(%w[web])
     end
   end
 end

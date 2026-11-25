@@ -1,3 +1,5 @@
+require "digest"
+require "set"
 require "active_support/core_ext/string/inflections"
 
 module StandardFlags
@@ -7,8 +9,9 @@ module StandardFlags
     # `config.kotlin_package`:
     #
     # * `StandardFlagsManifest`: the manifest version and the SHA-256 of the
-    #   manifest file it was generated from, so a client build can tell it
-    #   is out of date;
+    #   canonical manifest (`Manifest#digest`: what `standard_flags:manifest`
+    #   writes, LF line endings), so a client build can tell it is out of
+    #   date;
     # * `FeatureType`: BOOLEAN or STRING, a wire's JSON type;
     # * per audience, `enum class <Audience>Feature(val wire: String, val
     #   type: FeatureType)`, one entry per wire (aliases and deprecated
@@ -19,9 +22,21 @@ module StandardFlags
     #   `fromValue`.
     #
     # Entry names are the wire name or value in SCREAMING_SNAKE_CASE
-    # (`homeHero` → `HOME_HERO`). Two wires of one audience that map to the
-    # same name raise NameClash; clashing values get their 1-based position
-    # appended.
+    # (`homeHero` → `HOME_HERO`). Generation never fails on a clash:
+    #
+    # * Wires of one audience that map to the same name (`new_checkout` and
+    #   `newCheckout`, an alias pair a rename leaves behind): the snake_case
+    #   spelling, whose upcase is the name, keeps it; every other spelling
+    #   gets `_` and the first 8 hex digits of the SHA-256 of its exact
+    #   spelling (`NEW_CHECKOUT_1F0A2B3C`), and its KDoc names the wire. The
+    #   suffix depends only on the wire itself, so adding a wire never
+    #   renames an existing constant unless the new wire maps to the same
+    #   name.
+    # * Values of one flag that map to the same name: the first keeps it, and
+    #   each later one, in declared order, gets the first free `_2`, `_3`, …
+    #
+    # NameClash is left for what can't be resolved: two generated type names
+    # that are equal, or a name that isn't an identifier.
     class Kotlin
       # Two generated names would be the same Kotlin identifier, or a name
       # isn't one.
@@ -67,6 +82,35 @@ module StandardFlags
           end
         end.join
         "\"#{body}\""
+      end
+
+      # Entry names for one audience's wires, `{ wire => name }` (see the
+      # class comment). Raises NameClash only if a suffixed name is itself
+      # taken.
+      def self.wire_constants(wires)
+        names = {}
+        wires.group_by { |wire| constant(wire) }.each do |base, spellings|
+          plain = spellings.size == 1 ? spellings.first : spellings.find { |wire| wire.match?(/\A[a-z0-9_]+\z/) && wire.upcase == base }
+          spellings.each { |wire| names[wire] = wire == plain ? base : "#{base}_#{Digest::SHA256.hexdigest(wire)[0, 8].upcase}" }
+        end
+        taken = names.group_by(&:last).find { |_, pairs| pairs.size > 1 }
+        raise NameClash, "wires #{taken.last.map(&:first).inspect} would all be #{taken.first} in Kotlin; rename one" if taken
+
+        names
+      end
+
+      # Entry names for one flag's values, in declared order: a clash gets the
+      # first free `_2`, `_3`, …
+      def self.value_constants(values)
+        used = Set.new
+        values.map do |value|
+          base = constant(value)
+          name = base
+          suffix = 1
+          name = "#{base}_#{suffix += 1}" while used.include?(name)
+          used << name
+          name
+        end
       end
 
       # SCREAMING_SNAKE_CASE for a wire name or value; "V_" in front of one
@@ -119,17 +163,15 @@ module StandardFlags
 
       def audience_enum(audience, wires, names)
         name = claim(names, "#{audience.camelize}Feature", "audience #{audience}")
-        entries = {}
+        constants = self.class.wire_constants(wires.map(&:first))
         out = [ "/** The wires the #{audience} audience is told, ordered by wire name. */",
                 "enum class #{name}(val wire: String, val type: FeatureType) {" ]
         wires.each do |wire, type, flag, tombstone|
-          constant = self.class.constant(wire)
-          if (other = entries[constant])
-            raise NameClash, "wires #{other.inspect} and #{wire.inspect} of audience #{audience} are both #{constant} in Kotlin; rename one"
-          end
-
-          entries[constant] = wire
-          out << "#{INDENT}/** Values: [#{value_enum_name(flag)}]. */" if flag && type == "string" && value_flag?(flag)
+          constant = constants.fetch(wire)
+          notes = []
+          notes << "Wire #{wire} (another spelling has #{self.class.constant(wire)})." unless constant == self.class.constant(wire)
+          notes << "Values: [#{value_enum_name(flag)}]." if flag && type == "string" && value_flag?(flag)
+          out << "#{INDENT}/** #{notes.join(' ')} */" unless notes.empty?
           if tombstone
             out << "#{INDENT}@Deprecated(#{self.class.string("No longer declared; served as a static value through #{tombstone.fetch('until')}")})"
           end
@@ -155,8 +197,7 @@ module StandardFlags
       def value_enum(flag, names)
         name = claim(names, value_enum_name(flag), "flag #{flag.fetch('key')}")
         values = flag.fetch("values").map(&:to_s)
-        constants = values.map { |value| self.class.constant(value) }
-        constants = constants.each_with_index.map { |constant, i| constants.count(constant) > 1 ? "#{constant}_#{i + 1}" : constant }
+        constants = self.class.value_constants(values)
         wires = flag.fetch("audiences").sort.map { |audience, list| "#{audience}: #{list.join(', ')}" }.join("; ")
         out = [ "/** Values of #{wires}. */", "enum class #{name}(val value: String) {" ]
         values.zip(constants).each { |value, constant| out << "#{INDENT}#{constant}(#{self.class.string(value)})," }

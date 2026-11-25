@@ -1865,10 +1865,17 @@ turn it into client types.
   wire, plus lifecycle dates. Operators read owners through `flags:list`,
   `flags:show` and the MCP tools.
 
-The JSON Schema is `conformance/schema/manifest.schema.json`. Version 1
-files (0.3.0 and earlier) are still read, so the check can compare an old
-committed file and report what upgrading changes. Regenerate after
-upgrading the gem.
+The JSON Schema is `conformance/schema/manifest.schema.json`. The reader
+refuses anything the schema rejects, plus what a schema can't say: a
+`version` that isn't the integer 2, dates that aren't calendar dates, and a
+wire listed twice for one audience. Version 1 files (0.3.0 and earlier) are
+still read, so the check can compare an old committed file and report what
+upgrading changes. Regenerate after upgrading the gem.
+
+The file is generated text: keep formatters and line-ending conversion away
+from it. Put `config/flags.manifest.json -text` in `.gitattributes` and the
+path in `.prettierignore`. The check tolerates CRLF line endings and
+trailing newlines; other reformatting makes it stale.
 
 ### Checking it in server CI
 
@@ -1877,32 +1884,49 @@ with the registry. It exits with:
 
 | Exit | Meaning | Fix |
 |------|---------|-----|
-| 0 | The committed file matches what `standard_flags:manifest` writes, byte for byte. | — |
+| 0 | The committed file matches what `standard_flags:manifest` writes (CRLF line endings and trailing newlines aside). | — |
 | 1 | Stale (or missing): the registry changed. The output lists what changed per flag and tombstone. | Run `standard_flags:manifest` and commit. |
-| 2 | The client contract is broken: a wire the baseline told an audience is gone without a tombstone serving it, a wire changed type, or a manifest can't be read. | Keep the wire, or tombstone it with `serve:` and `until:`; or use a new wire name. |
+| 2 | The client contract is broken. Either a wire the baseline told an audience is gone without a tombstone serving it, or a wire changed type, or a public audience serving wires became private (clients before sign-in lose them all). | Keep the wire (or the audience public), or tombstone the wire with `serve:` and `until:`, or use a new wire name. |
+| 2 | The baseline given as `BASE=` is missing or unreadable, or a manifest can't be read. | Fix the CI step; see below. |
 
 A wire counts as served by a tombstone only while its `until:` is today or
 later (UTC). A deprecated wire whose `until:` has passed in the baseline may
 be deleted: its window is over. Moving a wire to another flag of the same
 type is fine. Moving it to another audience removes it from the first.
+Moving a deprecated wire's `until:` earlier is printed as a warning, since
+shipped clients were promised the later date, but it doesn't fail.
 
-The baseline is `BASE=` when given, else the committed file. In CI, pass the
-base branch's manifest, so a PR that regenerates the file in the same commit
-still can't drop a wire. When the `BASE` file doesn't exist (the first PR
-that adds a manifest), only staleness is checked:
+The baseline is `BASE=`, the base branch's manifest, so a PR that
+regenerates the file in the same commit still can't drop a wire. Without
+`BASE=` the committed file stands in, and the check prints a warning that a
+regenerated file hides removals. A `BASE` file that is missing, a directory
+or unreadable fails with exit 2, unless `BASE_OPTIONAL=1`. Set that only for
+first adoption, when the base branch has no manifest yet. The contract
+checks are then skipped, with a warning.
 
 ```yaml
-# .github/workflows/ci.yml (a job with the app's Ruby and database set up)
+# .github/workflows/ci.yml, in a job with the app's Ruby and database set up.
+# MANIFEST is config.manifest_path.
 - uses: actions/checkout@v4
-  with:
-    fetch-depth: 0
 - name: Flag manifest
+  env:
+    BASE_REF: ${{ github.base_ref || 'main' }}
+    MANIFEST: config/flags.manifest.json
   run: |
+    git fetch --no-tags --depth=1 origin "$BASE_REF"
     mkdir -p tmp
-    git show "origin/${{ github.base_ref || 'main' }}:config/flags.manifest.json" > tmp/base.manifest.json 2>/dev/null \
-      || rm -f tmp/base.manifest.json
-    bin/rails standard_flags:manifest:check BASE=tmp/base.manifest.json
+    if git cat-file -e "FETCH_HEAD:$MANIFEST" 2>/dev/null; then
+      git show "FETCH_HEAD:$MANIFEST" > tmp/base.manifest.json
+      bin/rails standard_flags:manifest:check BASE=tmp/base.manifest.json
+    else
+      # First adoption: the base branch has no manifest yet.
+      bin/rails standard_flags:manifest:check BASE=tmp/base.manifest.json BASE_OPTIONAL=1
+    fi
 ```
+
+A failed fetch fails the step (the default shell exits on error), and `git
+show` runs only when the file exists at the base, so no error turns into a
+skipped check.
 
 `StandardFlags::Tooling::ManifestCheck` is the same check as a class, for
 apps with their own CI scripts.
@@ -1957,12 +1981,23 @@ enum class HomeHeroValue(val value: String) {
 - There is one `<Key>Value` enum per mode or experiment exposed to any
   audience, in declared order.
 - Entry names are SCREAMING_SNAKE_CASE (`homeHero` becomes `HOME_HERO`).
-  Values that can't start an identifier get `V_` (`2fa` becomes `V_2FA`), and
-  clashing values get their position appended.
-- Two wires of one audience that would get the same name fail the task.
+  Values that can't start an identifier get `V_` (`2fa` becomes `V_2FA`).
+- Generation never fails on a name clash:
+  - When two wires of one audience map to the same name (`new_checkout` and
+    `newCheckout`, the alias pair a rename leaves), the snake_case spelling
+    keeps the plain name. Every other spelling gets `_` plus 8 hex digits
+    of the SHA-256 of its exact spelling (`NEW_CHECKOUT_1F0A2B3C`), and its
+    KDoc names the wire. The suffix depends only on the wire itself, so
+    adding a wire never renames an existing constant unless the new wire
+    maps to the same name.
+  - When two values of one flag map to the same name, later ones in
+    declared order get the first free `_2`, `_3`, and so on.
 - The source is ASCII: every other character is escaped.
-- `SHA256` is the SHA-256 of the manifest file it was generated from, so a
-  client build can tell whether its copy is current.
+- `SHA256` is `Tooling::Manifest#digest`, the SHA-256 of the canonical
+  manifest: exactly what `standard_flags:manifest` writes, with LF line
+  endings. It equals the committed file's hash when the file is current and
+  untouched by line-ending conversion. A client build can compare it with
+  the server's manifest to tell whether its copy is current.
 
 ### TypeScript
 
@@ -1972,7 +2007,8 @@ manifest:
 
 - one `<Audience>Wire` union per audience (deprecated static wires
   included), and `WiresByAudience`;
-- the OFREP shapes: `OfrepEvaluationRequest`, `OfrepEvaluationSuccess<W>`,
+- the OFREP shapes: `OfrepEvaluationRequest` (with `appVersion` or
+  `app_version`), `OfrepEvaluationSuccess<W>`,
   `OfrepEvaluationFailure<W>`, `OfrepBulkResponse<W>`, `OfrepFlagNotFound`,
   `OfrepInvalidContext`, `OfrepReason`, `OfrepErrorCode`, and
   `OfrepBulkResponseByAudience`.
@@ -1999,7 +2035,7 @@ checks therefore agree on what breaks a shipped build.
 | `bin/rails flags:restore AT=` | Rules and memberships as they were at `AT`, from the audit log; a dry run unless `APPLY=1` ([Restore](#restore)). |
 | `bin/rails flags:refs` | Scans `config.refs_paths` (default `app lib config`) for `on?(:k`, `off?(:k`, `mode(:k`, `variant(:k`, `evaluate(:k`, `requires_flag :k` and string keys. Exits non-zero for undeclared or tombstoned keys; warns for declared flags nothing reads. Run it in CI. |
 | `bin/rails standard_flags:manifest` | Writes `config/flags.manifest.json` (version 2): audiences, and per flag its wire names per audience, kind, type, values, defaults, `min_client` and lifecycle; tombstones with their deprecated wires. Deterministic. Commit it ([The manifest](#the-manifest-version-2)). |
-| `bin/rails standard_flags:manifest:check [BASE=]` | Exits 1 when the committed manifest is stale or missing, 2 when a wire the baseline told a client is gone without a tombstone, changed type, or a manifest can't be read ([Checking it in server CI](#checking-it-in-server-ci)). |
+| `bin/rails standard_flags:manifest:check BASE= [BASE_OPTIONAL=1]` | Exits 1 when the committed manifest is stale or missing. Exits 2 when a wire the baseline told a client is gone without a tombstone, a wire changed type, a public audience went private, `BASE` is unavailable, or a manifest can't be read ([Checking it in server CI](#checking-it-in-server-ci)). |
 | `bin/rails standard_flags:kotlin` | Writes `config.kotlin_path`: a `<Audience>Feature` enum per audience, a `<Key>Value` enum per mode and experiment, `FeatureType`, and the manifest's version and digest ([Kotlin](#kotlin)). |
 | `bin/rails standard_flags:typescript` | Writes a `.d.ts` with a `Features` interface per audience (`WebFeatures`, `MobileFeatures`, …) keyed by wire name, a `<Audience>Wire` union per audience, `FlagKey` and `FlagValues` (every key and its stored values), the OFREP request and response types, and the shapes of the MCP tools' results that the [admin page](#admin-page) uses. |
 

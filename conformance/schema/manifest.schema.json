@@ -2,77 +2,269 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/rarebit-one/standard_flags/main/conformance/schema/manifest.schema.json",
   "title": "standard_flags manifest, version 2",
-  "description": "The file `bin/rails standard_flags:manifest` writes (config.manifest_path). Client contract checks read `audiences`, each flag's `type` and `audiences`, and each tombstone's `serve` and `until`. Unknown top-level members may be added in later minor releases; readers ignore them.",
+  "description": "The file `bin/rails standard_flags:manifest` writes (config.manifest_path). Client contract checks read `audiences`, each flag's `type` and `audiences`, and each tombstone's `serve` and `until`. Beyond what this schema checks, a reader also refuses: `version` written as anything but the integer 2 (`2.0`), dates that aren't calendar dates (`2026-02-30`; `format: date` says so, but not every validator asserts formats), and a wire listed twice for one audience (by two flags, or by a flag and a tombstone). Unknown top-level members may be added in later minor releases; readers ignore them.",
   "type": "object",
-  "required": ["version", "audiences", "flags", "tombstones"],
+  "required": [
+    "version",
+    "audiences",
+    "flags",
+    "tombstones"
+  ],
   "properties": {
-    "version": { "const": 2 },
+    "version": {
+      "const": 2
+    },
     "audiences": {
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required": ["public"],
-        "properties": { "public": { "type": "boolean" } },
+        "required": [
+          "public"
+        ],
+        "properties": {
+          "public": {
+            "type": "boolean"
+          }
+        },
         "additionalProperties": false
       }
     },
-    "flags": { "type": "array", "items": { "$ref": "#/$defs/flag" } },
-    "tombstones": { "type": "array", "items": { "$ref": "#/$defs/tombstone" } }
+    "flags": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/flag"
+      }
+    },
+    "tombstones": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/tombstone"
+      }
+    }
   },
   "$defs": {
-    "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
-    "wire_name": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" },
-    "date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
-    "value": { "type": ["boolean", "string"] },
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "wire_name": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "format": "date"
+    },
+    "value": {
+      "type": [
+        "boolean",
+        "string"
+      ]
+    },
     "platform_versions": {
       "type": "object",
-      "additionalProperties": { "type": "string", "minLength": 1 }
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
     },
     "flag": {
       "type": "object",
-      "required": ["key", "kind", "type", "values", "default", "audiences", "min_client"],
+      "required": [
+        "key",
+        "kind",
+        "type",
+        "values",
+        "default",
+        "audiences",
+        "min_client"
+      ],
       "properties": {
-        "key": { "$ref": "#/$defs/key" },
-        "kind": { "enum": ["flag", "kill_switch", "mode", "experiment", "compat"] },
-        "type": { "enum": ["boolean", "string"] },
-        "values": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/value" } },
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "kind": {
+          "enum": [
+            "flag",
+            "kill_switch",
+            "mode",
+            "experiment",
+            "compat"
+          ]
+        },
+        "type": {
+          "enum": [
+            "boolean",
+            "string"
+          ]
+        },
+        "values": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/value"
+          }
+        },
         "default": {
           "oneOf": [
-            { "$ref": "#/$defs/value" },
-            { "type": "object", "required": ["*"], "additionalProperties": { "$ref": "#/$defs/value" } }
+            {
+              "$ref": "#/$defs/value"
+            },
+            {
+              "type": "object",
+              "required": [
+                "*"
+              ],
+              "additionalProperties": {
+                "$ref": "#/$defs/value"
+              }
+            }
           ]
         },
         "audiences": {
           "type": "object",
-          "additionalProperties": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/wire_name" } }
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/wire_name"
+            }
+          }
         },
-        "min_client": { "$ref": "#/$defs/platform_versions" },
-        "permanent": { "type": "boolean" },
-        "remove_by": { "$ref": "#/$defs/date" },
-        "final": { "$ref": "#/$defs/value" }
+        "min_client": {
+          "$ref": "#/$defs/platform_versions"
+        },
+        "permanent": {
+          "type": "boolean"
+        },
+        "remove_by": {
+          "$ref": "#/$defs/date"
+        },
+        "final": {
+          "$ref": "#/$defs/value"
+        }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "boolean"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "values": {
+                "items": {
+                  "type": "boolean"
+                }
+              },
+              "default": {
+                "oneOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "boolean"
+                    }
+                  }
+                ]
+              },
+              "final": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "string"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "values": {
+                "items": {
+                  "type": "string"
+                }
+              },
+              "default": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  }
+                ]
+              },
+              "final": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
     },
     "tombstone": {
       "type": "object",
-      "required": ["key", "removed"],
+      "required": [
+        "key",
+        "removed"
+      ],
       "properties": {
-        "key": { "$ref": "#/$defs/key" },
-        "removed": { "$ref": "#/$defs/date" },
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "removed": {
+          "$ref": "#/$defs/date"
+        },
         "serve": {
           "type": "object",
           "minProperties": 1,
           "additionalProperties": {
             "type": "object",
             "minProperties": 1,
-            "propertyNames": { "$ref": "#/$defs/wire_name" },
-            "additionalProperties": { "$ref": "#/$defs/value" }
+            "propertyNames": {
+              "$ref": "#/$defs/wire_name"
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/value"
+            }
           }
         },
-        "until": { "$ref": "#/$defs/date" },
-        "until_clients": { "$ref": "#/$defs/platform_versions" }
+        "until": {
+          "$ref": "#/$defs/date"
+        },
+        "until_clients": {
+          "$ref": "#/$defs/platform_versions"
+        }
       },
-      "dependentRequired": { "serve": ["until", "until_clients"], "until": ["serve"], "until_clients": ["serve"] },
+      "dependentRequired": {
+        "serve": [
+          "until",
+          "until_clients"
+        ],
+        "until": [
+          "serve"
+        ],
+        "until_clients": [
+          "serve"
+        ]
+      },
       "additionalProperties": false
     }
   }

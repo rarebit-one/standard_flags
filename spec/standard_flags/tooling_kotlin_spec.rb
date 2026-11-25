@@ -22,7 +22,8 @@ RSpec.describe StandardFlags::Tooling::Kotlin do
     define_flags do
       flag :new_checkout, owner: "payments", remove_by: "2027-03-01", final: true,
                           expose: { web: :newCheckout, mobile: :newCheckout }, min_client: { android: "0.4.0" }
-      kill_switch :ai_assistant, owner: "assistant", expose: { web: :assistant, mobile: %i[chat chatEnabled] }
+      kill_switch :ai_assistant, owner: "assistant", expose: { web: :assistant, mobile: %i[chat chatEnabled chatV1] }
+      mode :theme, owner: "design", values: %w[a_b a-b a_b_2 1 v_1], permanent: true, expose: { web: :theme }
       mode :strict_gates, owner: "platform", preset: :sensor, expose: { web: :strict_gates }
       mode :review_flow, owner: "platform", values: %i[off two-step 2fa], permanent: true, expose: { pre_auth: :reviewFlow }
       experiment :home_hero, owner: "growth", variants: [ "control", "save $5", "contrôle", "a\"b\\c", "control-a", "control_a" ],
@@ -97,13 +98,63 @@ RSpec.describe StandardFlags::Tooling::Kotlin do
     end
   end
 
-  it "refuses two wires of one audience that would be the same entry" do
-    define_flags do
-      kill_switch :a, owner: "x", expose: { mobile: :chatEnabled }
-      kill_switch :b, owner: "x", expose: { mobile: :chat_enabled }
+  describe "wires that map to the same entry name" do
+    def entries(source, enum)
+      source[/enum class #{enum}\(.*?\n\}/m].scan(/^    ([A-Z0-9_]+)\("([^"]+)"/).to_h { |name, wire| [ wire, name ] }
     end
-    expect { described_class.new.render }
-      .to raise_error(described_class::NameClash, /wires "chatEnabled" and "chat_enabled" of audience mobile are both CHAT_ENABLED/)
+
+    it "keeps the plain name for the snake_case spelling and suffixes the others by their exact spelling" do
+      define_flags do
+        flag :new_checkout, owner: "x", permanent: true, expose: { mobile: %i[new_checkout newCheckout NewCheckout] }
+        kill_switch :chat, owner: "x", expose: { mobile: :chatV1 }
+        tombstone :chat_v1, removed: "2026-12-01", serve: { mobile: { chat_v1: false } }, until: "2027-03-01"
+      end
+      source = described_class.new.render
+      hash = ->(wire) { Digest::SHA256.hexdigest(wire)[0, 8].upcase }
+
+      expect(entries(source, "MobileFeature")).to eq(
+        "NewCheckout" => "NEW_CHECKOUT_#{hash.call('NewCheckout')}", "chatV1" => "CHAT_V1_#{hash.call('chatV1')}",
+        "chat_v1" => "CHAT_V1", "newCheckout" => "NEW_CHECKOUT_#{hash.call('newCheckout')}", "new_checkout" => "NEW_CHECKOUT"
+      )
+      expect(source).to include("    /** Wire newCheckout (another spelling has NEW_CHECKOUT). */\n    NEW_CHECKOUT_#{hash.call('newCheckout')}(")
+      expect(KotlinSyntax.check!(source)).to be(true)
+    end
+
+    it "suffixes every spelling when none of them is snake_case" do
+      define_flags { flag :checkout, owner: "x", permanent: true, expose: { mobile: %i[newCheckout NewCheckout] } }
+      expect(entries(described_class.new.render, "MobileFeature").values).to all(match(/\ANEW_CHECKOUT_\h{8}\z/))
+    end
+
+    it "never renames an existing constant when an unrelated wire is added" do
+      define_flags { flag :checkout, owner: "x", permanent: true, expose: { mobile: %i[new_checkout newCheckout] } }
+      before = entries(described_class.new.render, "MobileFeature")
+      define_flags { flag :checkout, owner: "x", permanent: true, expose: { mobile: %i[new_checkout newCheckout alpha newCheckoutV2 zed] } }
+      after = entries(described_class.new.render, "MobileFeature")
+
+      expect(after.slice(*before.keys)).to eq(before)
+    end
+
+    it "raises only if a suffixed name is itself taken" do
+      suffixed = "NEW_CHECKOUT_#{Digest::SHA256.hexdigest('newCheckout')[0, 8].upcase}"
+      expect { described_class.wire_constants([ "new_checkout", "newCheckout", suffixed.downcase ]) }
+        .to raise_error(described_class::NameClash, /would all be #{suffixed}/)
+    end
+  end
+
+  describe "values that map to the same entry name" do
+    it "gives later ones the first free _2, _3, … in declared order, never a duplicate" do
+      expect(described_class.value_constants(%w[a_b a-b a_b_2 a.b])).to eq(%w[A_B A_B_2 A_B_2_2 A_B_3])
+      expect(described_class.value_constants(%w[1 v_1 V-1 v_1_2])).to eq(%w[V_1 V_1_2 V_1_3 V_1_2_2])
+      expect(described_class.value_constants(%w[a_b_1 a_b a-b])).to eq(%w[A_B_1 A_B A_B_2])
+    end
+
+    it "emits a file the duplicate-checking syntax check accepts" do
+      define_flags { mode :theme, owner: "x", values: %w[a_b a-b a_b_1 a_b_2 1 v_1], permanent: true, expose: { mobile: :theme } }
+      source = described_class.new.render
+
+      expect(source).to include('A_B("a_b")', 'A_B_2("a-b")', 'A_B_1("a_b_1")', 'A_B_2_2("a_b_2")', 'V_1("1")', 'V_1_2("v_1")')
+      expect(KotlinSyntax.check!(source)).to be(true)
+    end
   end
 
   it "refuses generated type names that clash or aren't identifiers" do
@@ -136,7 +187,9 @@ RSpec.describe StandardFlags::Tooling::Kotlin do
       "an unescaped dollar" => %(object A { const val B: String = "$x" }),
       "a keyword as a name" => "enum class object { A }",
       "an unknown declaration" => "fun main() {}",
-      "a stray character" => "enum class A { B# }"
+      "a stray character" => "enum class A { B# }",
+      "a duplicate enum entry" => "enum class A(val v: String) { B(\"b\"), B(\"c\"), ; }",
+      "a duplicate type" => "enum class A { B }\nobject A { }"
     }.each do |label, source|
       it "rejects #{label}" do
         expect { KotlinSyntax.check!(source) }.to raise_error(KotlinSyntax::Error)
@@ -161,6 +214,9 @@ RSpec.describe StandardFlags::Tooling::Kotlin do
             check(HomeHeroValue.fromValue("save \\$5") == HomeHeroValue.SAVE_5)
             check(ReviewFlowValue.fromValue("2fa") == ReviewFlowValue.V_2FA)
             check(WebFeature.fromWire("chat") == null)
+            check(ThemeValue.fromValue("a_b_2") == ThemeValue.A_B_2_2)
+            check(ThemeValue.fromValue("v_1") == ThemeValue.V_1_2)
+            check(MobileFeature.fromWire("chat_v1") != MobileFeature.fromWire("chatV1"))
             check(StandardFlagsManifest.SHA256.length == 64)
             println("ok")
         }

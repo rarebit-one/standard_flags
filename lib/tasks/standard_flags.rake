@@ -73,16 +73,28 @@ namespace :standard_flags do
 
   namespace :manifest do
     # Exit 0 when the committed manifest matches the registry; 1 when it is
-    # stale or missing; 2 when a wire the baseline (BASE=, else the committed
-    # file) told a client is gone without a tombstone serving it, changed
-    # type, or a manifest can't be read.
-    desc "Check the committed manifest against the registry: [BASE=path to the base branch's manifest]"
+    # stale or missing; 2 when a wire the baseline told a client is gone
+    # without a tombstone serving it, changed type, or a public audience
+    # went private, or when a manifest (or a given BASE) can't be read.
+    # Without BASE= the committed file is the baseline, with a warning;
+    # BASE_OPTIONAL=1 lets a missing BASE file skip the contract checks.
+    desc "Check the committed manifest against the registry: BASE=<base branch's manifest> [BASE_OPTIONAL=1]"
     task check: :environment do
       path = Rails.root.join(StandardFlags.config.manifest_path)
-      committed = File.exist?(path) ? File.read(path) : nil
-      base = ENV["BASE"].to_s.strip
-      options = base.empty? ? {} : { base: File.exist?(base) ? File.read(base) : nil }
-      check = StandardFlags::Tooling::ManifestCheck.new(committed: committed, **options)
+      committed = File.file?(path) ? File.binread(path).force_encoding(Encoding::UTF_8) : nil
+      base_path = ENV["BASE"].to_s.strip
+      base =
+        if base_path.empty? then :committed
+        elsif File.directory?(base_path) then StandardFlags::Tooling::ManifestCheck::Unavailable.new("BASE #{base_path} is a directory")
+        elsif !File.exist?(base_path) then StandardFlags::Tooling::ManifestCheck::Unavailable.new("BASE #{base_path} does not exist")
+        else
+          begin
+            File.binread(base_path).force_encoding(Encoding::UTF_8)
+          rescue SystemCallError => e
+            StandardFlags::Tooling::ManifestCheck::Unavailable.new("BASE #{base_path} can't be read (#{e.class})")
+          end
+        end
+      check = StandardFlags::Tooling::ManifestCheck.new(committed: committed, base: base, base_optional: ENV["BASE_OPTIONAL"] == "1")
       result = check.call
       relative = path.relative_path_from(Rails.root).to_s
       if result.ok?

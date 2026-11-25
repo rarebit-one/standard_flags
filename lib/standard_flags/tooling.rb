@@ -320,12 +320,15 @@ module StandardFlags
         export type OfrepReason = #{(Reason::ALL - [ Reason::ERROR ]).map(&:to_json).join(' | ')};
         export type OfrepErrorCode = #{Delivery::ERROR_CODES.map(&:to_json).join(' | ')};
 
+        // Other context fields are ignored by the server; a header wins over the body.
         export interface OfrepEvaluationRequest {
           readonly context: {
             readonly targetingKey?: string;
             readonly platform?: string;
             readonly appVersion?: string;
+            readonly app_version?: string;
             readonly build?: string | number;
+            readonly [field: string]: unknown;
           };
         }
 
@@ -349,6 +352,7 @@ module StandardFlags
           readonly metadata: { readonly version: string };
         }
 
+        // The single-flag 404. FLAG_NOT_FOUND never appears in a bulk entry.
         export interface OfrepFlagNotFound {
           readonly key: string;
           readonly errorCode: "FLAG_NOT_FOUND";
@@ -509,7 +513,8 @@ module StandardFlags
           list = wires.fetch(audience, {}).keys.sort.map(&:to_json)
           "export type #{wire_type_name(audience)} = #{list.empty? ? 'never' : list.join(' | ')};"
         end
-        out << "" << "export type WiresByAudience = {"
+        out << "" << "// Every audience the manifest lists, so it may name audiences FeaturesByAudience doesn't."
+        out << "export type WiresByAudience = {"
         names.each { |audience| out << "  readonly #{property(audience)}: #{wire_type_name(audience)};" }
         out << "};" << ""
       end

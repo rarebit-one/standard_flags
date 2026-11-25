@@ -88,17 +88,25 @@ RSpec.describe "wire conformance fixtures" do
         today = Date.iso8601(example.fetch("today") { fixture.fetch("today") })
         result = StandardFlags::Tooling::ManifestCheck.new(committed: example.fetch("committed"), current: example.fetch("current"),
                                                            current_render: "", today: today).call
-        actual = { "status" => result.status.to_s, "stale" => result.stale,
-                   "removed_wires" => result.removed_wires.map(&:to_h), "type_changes" => result.type_changes.map(&:to_h) }
+        actual =
+          if result.status == :unreadable
+            { "status" => "invalid", "invalid" => result.error_source.to_s }
+          else
+            { "status" => result.status.to_s, "stale" => result.stale, "removed_wires" => result.removed_wires.map(&:to_h),
+              "type_changes" => result.type_changes.map(&:to_h), "audiences_made_private" => result.audiences_made_private.map(&:to_h) }
+          end
 
         expect(actual).to eq(example.fetch("expected"))
       end
     end
 
-    it "holds only manifests that validate, version 1 only in server cases" do
+    it "holds only manifests that validate, version 1 only in server cases, apart from the invalid ones" do
       fixture.fetch("cases").each do |example|
-        example.values_at("committed", "current").each do |manifest|
-          if manifest["version"] == 1
+        %w[committed current].each do |side|
+          manifest = example.fetch(side)
+          if example.dig("expected", "invalid") == side
+            expect { StandardFlags::Tooling::Manifest.read(manifest) }.to raise_error(StandardFlags::Tooling::Manifest::Unreadable)
+          elsif manifest["version"] == 1
             expect(example["scope"]).to eq("server"), example["name"]
           else
             expect(schema.validate(manifest).map { |error| error["error"] }).to eq([]), example["name"]

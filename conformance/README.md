@@ -31,7 +31,7 @@ versions passed outside SemVer).
 | `wire/client_state.json` | `client_state` | wire | OFREP payloads → what client code reads |
 | `wire/client_status.json` | `client_status` | wire | recognised platforms, client registry, X-Client-* header values, today → `/client/status` payload |
 | `upgrade/client_status_server.json` | `client_status` | server | the same, plus ENV pins and store lookups |
-| `wire/manifest_check.json` | `manifest_check` | wire | committed manifest, current manifest, today → ok / stale / breaking, removed wires, type changes |
+| `wire/manifest_check.json` | `manifest_check` | wire | committed manifest, current manifest, today → invalid, or ok / stale / breaking with removed wires, type changes, audiences made private |
 
 ## delivery.json: what the server sends
 
@@ -109,6 +109,13 @@ last good one and that payload's version, when any of these hold:
 - it is larger than `max_bytes` (a payload of exactly `max_bytes` is
   accepted), or is not JSON (a byte-order mark or trailing bytes make it not
   JSON);
+- it is not strict RFC 8259 JSON. Lenient parsers must be configured
+  strictly: no unquoted literals (`tru`, `True`, `NaN`, `Infinity`), single
+  quotes, unquoted keys, malformed numbers (`01`, `1.`, `-`), trailing
+  commas, raw control characters (U+0000 to U+001F) inside strings, or
+  escapes other than `\" \\ \/ \b \f \n \r \t \uXXXX`;
+- it nests more than `max_nesting` containers. Every object and array
+  counts, the top level being 1, so exactly `max_nesting` is accepted;
 - the top level is not an object;
 - `flags` is not an array, or has more than `max_flags` entries;
 - an entry is not an object, or has no non-empty string `key`;
@@ -120,7 +127,10 @@ send an object with a repeated member name, so how a client reads one is not
 pinned.
 
 **Accepting a payload.** The client remembers `metadata.version` when it is
-a non-empty string, else null, and sends it as If-None-Match next time. A
+a non-empty string whose every character is printable ASCII other than a
+space or a double quote (U+0021, U+0023 to U+007E: what an ETag may hold),
+else null, and sends it quoted as If-None-Match next time. A version with
+CR or LF, a space, `"` or a non-ASCII character is not kept. A
 304 changes nothing, even before any payload. Keys the client doesn't
 declare are ignored.
 
@@ -199,7 +209,9 @@ The server's `standard_flags:manifest:check` and a client library's contract
 check (the Kotlin library's Gradle task) run these cases, so they agree on
 what breaks a shipped build. Each case has a `committed` manifest (the
 baseline a client was built against), a `current` one and a `today` date
-(the case's, else the file's), all in UTC. The manifests are version 2 and
+(the case's, else the file's), all in UTC. A case expecting `"status":
+"invalid"` names the manifest (`committed` or `current`) a reader must
+refuse, and expects nothing else. The manifests are version 2 and
 validate against [`schema/manifest.schema.json`](schema/manifest.schema.json).
 The one case committing a version 1 manifest is `"scope": "server"`.
 
@@ -214,9 +226,16 @@ in one of two ways:
 
 The rules:
 
-- **`stale`** is true when the two manifests differ as JSON values. The
-  server task also compares the committed file's bytes with what it would
-  write, which the fixture can't express.
+- **Invalid manifests.** Besides what `schema/manifest.schema.json` rejects,
+  a reader refuses a `version` that isn't the integer 2, a date that isn't a
+  calendar date (`2027-02-30`), a tombstone `serve` without `until`, and a
+  wire listed twice for one audience (by two flags, twice in one list, or by
+  a flag and a tombstone).
+- **`stale`** is true when the two manifests differ as JSON values,
+  compared structurally: object member order is ignored, array order (wires,
+  values, flags, tombstones) is significant. The server task compares the
+  committed file's text with what it would write instead, ignoring CRLF
+  line endings and trailing newlines, which the fixture can't express.
 - **`removed_wires`** lists every wire the committed manifest tells an
   audience (a static wire only while it is still served on `today`) that the
   current manifest neither exposes to that audience from a flag nor serves
@@ -224,13 +243,20 @@ The rules:
   has passed may be removed. Moving a wire to another flag of the same type
   is not a removal. Moving it to another audience is.
 - **`type_changes`** lists every wire both manifests tell the same audience
-  whose type differs, with `from` and `to`.
-- Both lists are sorted by audience, then wire name. **`status`** is
-  `breaking` when either list is non-empty, else `stale` when `stale` is
-  true, else `ok`.
+  whose type differs, with `from` and `to`. This includes a committed static
+  wire whose `until` has passed: a wire name that comes back with another
+  type is still a change.
+- **`audiences_made_private`** lists every audience the committed manifest
+  marks `public: true`, with at least one wire still served on `today`,
+  that the current manifest marks `public: false`. Clients before sign-in
+  lose all of its wires. An audience that disappears altogether shows up as
+  removed wires instead.
+- Lists are sorted by audience, then wire name. **`status`** is `breaking`
+  when any list is non-empty, else `stale` when `stale` is true, else `ok`.
 
 Flag keys, kinds, defaults, values, `min_client` and lifecycle dates only
-make a manifest stale. Removed mode values and variants are not checked:
+make a manifest stale. Moving a deprecated wire's `until` earlier is a
+warning in the server task, not a break; warnings aren't pinned here. Removed mode values and variants are not checked:
 clients read unknown values as not usable (see `client_state.json`).
 
 ## versions/version_ranges.json

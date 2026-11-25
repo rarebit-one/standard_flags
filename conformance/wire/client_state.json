@@ -1,10 +1,11 @@
 {
-  "description": "Client state: OFREP bulk payloads in, what client code reads out. The client declares the wire keys it reads (type, code default, allowed string values, ceiling). Each case runs its steps in order on a fresh client: a step is a payload (an object, serialised however the runner likes; payload cases stay well under the limits), raw bytes (`raw`, UTF-8; measured against max_bytes), or a 304 (`not_modified`). Expected: whether the payload was accepted, the version kept for If-None-Match (metadata.version when it is a string), and each declared key's read: state on/off/not_loaded for booleans, loaded/not_loaded for strings, the value code reads, and the entry's reason when its value is used. See conformance/README.md for the rules.",
+  "description": "Client state: OFREP bulk payloads in, what client code reads out. The client declares the wire keys it reads (type, code default, allowed string values, ceiling). Each case runs its steps in order on a fresh client: a step is a payload (an object, serialised however the runner likes; payload cases stay well under the limits), raw bytes (`raw`, UTF-8; measured against max_bytes), or a 304 (`not_modified`). Expected: whether the payload was accepted, the version kept for If-None-Match (metadata.version when it is a non-empty string of printable ASCII other than space and double quote), and each declared key's read: state on/off/not_loaded for booleans, loaded/not_loaded for strings, the value code reads, and the entry's reason when its value is used. See conformance/README.md for the rules.",
   "suite": "client_state",
   "scope": "wire",
   "limits": {
     "max_bytes": 1024,
-    "max_flags": 16
+    "max_flags": 16,
+    "max_nesting": 100
   },
   "declared": {
     "chat_enabled": {
@@ -1865,6 +1866,1756 @@
           "expected": {
             "accepted": true,
             "version": null,
+            "reads": {
+              "chat_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "insights_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "not_loaded",
+                "value": "off",
+                "reason": null
+              },
+              "homeHero": {
+                "state": "not_loaded",
+                "value": "control",
+                "reason": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "strict JSON: unquoted literals reject the payload",
+      "steps": [
+        {
+          "payload": {
+            "flags": [
+              {
+                "key": "chat_enabled",
+                "value": true,
+                "reason": "DEFAULT",
+                "variant": "on"
+              },
+              {
+                "key": "gates",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH",
+                "variant": "sensor"
+              },
+              {
+                "key": "homeHero",
+                "value": "savings",
+                "reason": "SPLIT",
+                "variant": "savings"
+              },
+              {
+                "key": "insights_enabled",
+                "value": false,
+                "reason": "KILL_SWITCH",
+                "variant": "off"
+              }
+            ],
+            "metadata": {
+              "version": "v1"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"chat_enabled\",\"value\":tru}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"chat_enabled\",\"value\":True}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":NaN}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":Infinity}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "strict JSON: single quotes reject the payload",
+      "steps": [
+        {
+          "payload": {
+            "flags": [
+              {
+                "key": "chat_enabled",
+                "value": true,
+                "reason": "DEFAULT",
+                "variant": "on"
+              },
+              {
+                "key": "gates",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH",
+                "variant": "sensor"
+              },
+              {
+                "key": "homeHero",
+                "value": "savings",
+                "reason": "SPLIT",
+                "variant": "savings"
+              },
+              {
+                "key": "insights_enabled",
+                "value": false,
+                "reason": "KILL_SWITCH",
+                "variant": "off"
+              }
+            ],
+            "metadata": {
+              "version": "v1"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"gates\",\"value\":'on'}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{'flags':[],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "strict JSON: unquoted keys reject the payload",
+      "steps": [
+        {
+          "payload": {
+            "flags": [
+              {
+                "key": "chat_enabled",
+                "value": true,
+                "reason": "DEFAULT",
+                "variant": "on"
+              },
+              {
+                "key": "gates",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH",
+                "variant": "sensor"
+              },
+              {
+                "key": "homeHero",
+                "value": "savings",
+                "reason": "SPLIT",
+                "variant": "savings"
+              },
+              {
+                "key": "insights_enabled",
+                "value": false,
+                "reason": "KILL_SWITCH",
+                "variant": "off"
+              }
+            ],
+            "metadata": {
+              "version": "v1"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{flags:[],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "strict JSON: malformed numbers reject the payload",
+      "steps": [
+        {
+          "payload": {
+            "flags": [
+              {
+                "key": "chat_enabled",
+                "value": true,
+                "reason": "DEFAULT",
+                "variant": "on"
+              },
+              {
+                "key": "gates",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH",
+                "variant": "sensor"
+              },
+              {
+                "key": "homeHero",
+                "value": "savings",
+                "reason": "SPLIT",
+                "variant": "savings"
+              },
+              {
+                "key": "insights_enabled",
+                "value": false,
+                "reason": "KILL_SWITCH",
+                "variant": "off"
+              }
+            ],
+            "metadata": {
+              "version": "v1"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":01}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":1.}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":-}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "strict JSON: an unquoted version rejects the payload",
+      "steps": [
+        {
+          "payload": {
+            "flags": [
+              {
+                "key": "chat_enabled",
+                "value": true,
+                "reason": "DEFAULT",
+                "variant": "on"
+              },
+              {
+                "key": "gates",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH",
+                "variant": "sensor"
+              },
+              {
+                "key": "homeHero",
+                "value": "savings",
+                "reason": "SPLIT",
+                "variant": "savings"
+              },
+              {
+                "key": "insights_enabled",
+                "value": false,
+                "reason": "KILL_SWITCH",
+                "variant": "off"
+              }
+            ],
+            "metadata": {
+              "version": "v1"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[],\"metadata\":{\"version\":abc}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "strict JSON: trailing commas reject the payload",
+      "steps": [
+        {
+          "payload": {
+            "flags": [
+              {
+                "key": "chat_enabled",
+                "value": true,
+                "reason": "DEFAULT",
+                "variant": "on"
+              },
+              {
+                "key": "gates",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH",
+                "variant": "sensor"
+              },
+              {
+                "key": "homeHero",
+                "value": "savings",
+                "reason": "SPLIT",
+                "variant": "savings"
+              },
+              {
+                "key": "insights_enabled",
+                "value": false,
+                "reason": "KILL_SWITCH",
+                "variant": "off"
+              }
+            ],
+            "metadata": {
+              "version": "v1"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[],\"metadata\":{\"version\":\"v2\"},}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":[1,]}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "strict JSON: a raw control character inside a string rejects the payload",
+      "steps": [
+        {
+          "payload": {
+            "flags": [
+              {
+                "key": "chat_enabled",
+                "value": true,
+                "reason": "DEFAULT",
+                "variant": "on"
+              },
+              {
+                "key": "gates",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH",
+                "variant": "sensor"
+              },
+              {
+                "key": "homeHero",
+                "value": "savings",
+                "reason": "SPLIT",
+                "variant": "savings"
+              },
+              {
+                "key": "insights_enabled",
+                "value": false,
+                "reason": "KILL_SWITCH",
+                "variant": "off"
+              }
+            ],
+            "metadata": {
+              "version": "v1"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":\"a\u0001b\"}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "strict JSON: invalid escapes reject the payload",
+      "steps": [
+        {
+          "payload": {
+            "flags": [
+              {
+                "key": "chat_enabled",
+                "value": true,
+                "reason": "DEFAULT",
+                "variant": "on"
+              },
+              {
+                "key": "gates",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH",
+                "variant": "sensor"
+              },
+              {
+                "key": "homeHero",
+                "value": "savings",
+                "reason": "SPLIT",
+                "variant": "savings"
+              },
+              {
+                "key": "insights_enabled",
+                "value": false,
+                "reason": "KILL_SWITCH",
+                "variant": "off"
+              }
+            ],
+            "metadata": {
+              "version": "v1"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":\"\\x41\"}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":\"\\u00G1\"}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "strict JSON: more than max_nesting nested containers reject the payload; exactly max_nesting is accepted",
+      "steps": [
+        {
+          "payload": {
+            "flags": [
+              {
+                "key": "chat_enabled",
+                "value": true,
+                "reason": "DEFAULT",
+                "variant": "on"
+              },
+              {
+                "key": "gates",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH",
+                "variant": "sensor"
+              },
+              {
+                "key": "homeHero",
+                "value": "savings",
+                "reason": "SPLIT",
+                "variant": "savings"
+              },
+              {
+                "key": "insights_enabled",
+                "value": false,
+                "reason": "KILL_SWITCH",
+                "variant": "off"
+              }
+            ],
+            "metadata": {
+              "version": "v1"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": false,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "raw": "{\"flags\":[{\"key\":\"homeHero\",\"value\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}],\"metadata\":{\"version\":\"v2\"}}",
+          "expected": {
+            "accepted": true,
+            "version": "v2",
+            "reads": {
+              "chat_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "insights_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "not_loaded",
+                "value": "off",
+                "reason": null
+              },
+              "homeHero": {
+                "state": "not_loaded",
+                "value": "control",
+                "reason": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "a version is kept only when every character is printable ASCII other than a space or a double quote",
+      "steps": [
+        {
+          "payload": {
+            "flags": [
+              {
+                "key": "chat_enabled",
+                "value": true,
+                "reason": "DEFAULT",
+                "variant": "on"
+              },
+              {
+                "key": "gates",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH",
+                "variant": "sensor"
+              },
+              {
+                "key": "homeHero",
+                "value": "savings",
+                "reason": "SPLIT",
+                "variant": "savings"
+              },
+              {
+                "key": "insights_enabled",
+                "value": false,
+                "reason": "KILL_SWITCH",
+                "variant": "off"
+              }
+            ],
+            "metadata": {
+              "version": "v1"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": "v1",
+            "reads": {
+              "chat_enabled": {
+                "state": "on",
+                "value": true,
+                "reason": "DEFAULT"
+              },
+              "insights_enabled": {
+                "state": "off",
+                "value": false,
+                "reason": "KILL_SWITCH"
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "loaded",
+                "value": "sensor",
+                "reason": "TARGETING_MATCH"
+              },
+              "homeHero": {
+                "state": "loaded",
+                "value": "savings",
+                "reason": "SPLIT"
+              }
+            }
+          }
+        },
+        {
+          "payload": {
+            "flags": [],
+            "metadata": {
+              "version": "a\r\nb"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": null,
+            "reads": {
+              "chat_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "insights_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "not_loaded",
+                "value": "off",
+                "reason": null
+              },
+              "homeHero": {
+                "state": "not_loaded",
+                "value": "control",
+                "reason": null
+              }
+            }
+          }
+        },
+        {
+          "payload": {
+            "flags": [],
+            "metadata": {
+              "version": "v 2"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": null,
+            "reads": {
+              "chat_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "insights_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "not_loaded",
+                "value": "off",
+                "reason": null
+              },
+              "homeHero": {
+                "state": "not_loaded",
+                "value": "control",
+                "reason": null
+              }
+            }
+          }
+        },
+        {
+          "payload": {
+            "flags": [],
+            "metadata": {
+              "version": "v\"2"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": null,
+            "reads": {
+              "chat_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "insights_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "not_loaded",
+                "value": "off",
+                "reason": null
+              },
+              "homeHero": {
+                "state": "not_loaded",
+                "value": "control",
+                "reason": null
+              }
+            }
+          }
+        },
+        {
+          "payload": {
+            "flags": [],
+            "metadata": {
+              "version": "vé2"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": null,
+            "reads": {
+              "chat_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "insights_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "not_loaded",
+                "value": "off",
+                "reason": null
+              },
+              "homeHero": {
+                "state": "not_loaded",
+                "value": "control",
+                "reason": null
+              }
+            }
+          }
+        },
+        {
+          "payload": {
+            "flags": [],
+            "metadata": {
+              "version": "W/\"x\""
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": null,
+            "reads": {
+              "chat_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "insights_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "not_loaded",
+                "value": "off",
+                "reason": null
+              },
+              "homeHero": {
+                "state": "not_loaded",
+                "value": "control",
+                "reason": null
+              }
+            }
+          }
+        },
+        {
+          "payload": {
+            "flags": [],
+            "metadata": {
+              "version": "\u0001"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": null,
+            "reads": {
+              "chat_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "insights_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "commerce_enabled": {
+                "state": "not_loaded",
+                "value": false,
+                "reason": null
+              },
+              "purchases": {
+                "state": "not_loaded",
+                "value": true,
+                "reason": null
+              },
+              "gates": {
+                "state": "not_loaded",
+                "value": "off",
+                "reason": null
+              },
+              "homeHero": {
+                "state": "not_loaded",
+                "value": "control",
+                "reason": null
+              }
+            }
+          }
+        },
+        {
+          "payload": {
+            "flags": [],
+            "metadata": {
+              "version": "v2!#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+            }
+          },
+          "expected": {
+            "accepted": true,
+            "version": "v2!#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
             "reads": {
               "chat_enabled": {
                 "state": "not_loaded",

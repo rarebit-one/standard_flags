@@ -5,12 +5,17 @@ require "json"
 # implement the same rules (conformance/README.md); the gem itself never
 # runs this outside its specs.
 class ClientStateReference
+  # A version is sent back quoted in If-None-Match, so only an ETag's
+  # characters are kept: printable ASCII other than space and `"`.
+  VERSION = /\A[\x21\x23-\x7E]+\z/
+
   attr_reader :version
 
   def initialize(declared, limits)
     @declared = declared
     @max_bytes = limits.fetch("max_bytes")
     @max_flags = limits.fetch("max_flags")
+    @max_nesting = limits.fetch("max_nesting")
     @entries = nil
     @version = nil
   end
@@ -23,7 +28,7 @@ class ClientStateReference
 
     @entries = document["flags"].to_h { |entry| [ entry["key"], entry ] }
     version = document.dig("metadata", "version")
-    @version = version.is_a?(String) && !version.empty? ? version : nil
+    @version = version.is_a?(String) && version.match?(VERSION) ? version : nil
     true
   end
 
@@ -41,7 +46,12 @@ class ClientStateReference
   def parse(raw)
     return nil if raw.bytesize > @max_bytes
 
-    document = JSON.parse(raw)
+    # Strict RFC 8259: no NaN or Infinity, comments, trailing commas, control
+    # characters in strings or bad escapes. Nesting is measured here, not by
+    # the json gem, whose max_nesting lets an empty innermost container
+    # through: every object and array counts, the top level being 1.
+    document = JSON.parse(raw, max_nesting: false, allow_nan: false)
+    return nil if depth(document) > @max_nesting
     return nil unless document.is_a?(Hash) && document["flags"].is_a?(Array)
     return nil if document.key?("metadata") && !document["metadata"].is_a?(Hash)
 
@@ -53,6 +63,14 @@ class ClientStateReference
     document
   rescue JSON::ParserError
     nil
+  end
+
+  def depth(value)
+    case value
+    when Hash then 1 + (value.values.map { |item| depth(item) }.max || 0)
+    when Array then 1 + (value.map { |item| depth(item) }.max || 0)
+    else 0
+    end
   end
 
   def read(declaration, entry)

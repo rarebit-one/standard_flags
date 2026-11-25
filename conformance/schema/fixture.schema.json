@@ -1249,7 +1249,8 @@
           "type": "object",
           "required": [
             "max_bytes",
-            "max_flags"
+            "max_flags",
+            "max_nesting"
           ],
           "properties": {
             "max_bytes": {
@@ -1257,6 +1258,10 @@
               "minimum": 1
             },
             "max_flags": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_nesting": {
               "type": "integer",
               "minimum": 1
             }
@@ -1541,7 +1546,7 @@
       }
     },
     "manifest_check_suite": {
-      "description": "Committed manifest + current manifest + today (UTC) in, check result out. Manifests are version 2 (conformance/schema/manifest.schema.json); a `server` case may commit version 1.",
+      "description": "Committed manifest + current manifest + today (UTC) in, check result out: `invalid` (naming the manifest a reader must refuse), or status, stale and the three finding lists. Manifests are version 2 (conformance/schema/manifest.schema.json); a `server` case may commit version 1.",
       "required": [
         "today",
         "cases"
@@ -1585,18 +1590,13 @@
               },
               "expected": {
                 "type": "object",
-                "required": [
-                  "status",
-                  "stale",
-                  "removed_wires",
-                  "type_changes"
-                ],
                 "properties": {
                   "status": {
                     "enum": [
                       "ok",
                       "stale",
-                      "breaking"
+                      "breaking",
+                      "invalid"
                     ]
                   },
                   "stale": {
@@ -1655,9 +1655,68 @@
                       },
                       "additionalProperties": false
                     }
+                  },
+                  "audiences_made_private": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "audience"
+                      ],
+                      "properties": {
+                        "audience": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "invalid": {
+                    "enum": [
+                      "committed",
+                      "current"
+                    ]
                   }
                 },
-                "additionalProperties": false
+                "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "required": [
+                      "status",
+                      "invalid"
+                    ],
+                    "properties": {
+                      "status": {
+                        "const": "invalid"
+                      }
+                    },
+                    "maxProperties": 2
+                  },
+                  {
+                    "required": [
+                      "status",
+                      "stale",
+                      "removed_wires",
+                      "type_changes",
+                      "audiences_made_private"
+                    ],
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "ok",
+                          "stale",
+                          "breaking"
+                        ]
+                      }
+                    },
+                    "not": {
+                      "required": [
+                        "invalid"
+                      ]
+                    }
+                  }
+                ]
               }
             },
             "additionalProperties": false

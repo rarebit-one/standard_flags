@@ -102,17 +102,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `final` when declared. Tombstones with deprecated wires carry `serve`,
   `until` and `until_clients`. `owner:` and `description:` are deliberately
   left out. The schema ships as `conformance/schema/manifest.schema.json`.
-  `StandardFlags::Tooling::Manifest.read` reads version 1 and 2 files, and
-  `#digest` is the SHA-256 of the rendered file.
-- **`standard_flags:manifest:check [BASE=]`** for server CI
-  (`StandardFlags::Tooling::ManifestCheck`). It exits 1 when the committed
-  manifest is stale (any byte differs) or missing, and lists the changes per
-  flag and tombstone. It exits 2 when a wire the baseline told an audience is
-  gone and no tombstone still serves it (`until:` today or later, UTC), when
-  a wire changed type, or when a manifest can't be read. The baseline is
-  `BASE=` (the base branch's manifest in CI) or the committed file. A
-  deprecated wire past its `until:` may be dropped. The README has a CI
-  snippet.
+  `StandardFlags::Tooling::Manifest.read` reads version 1 and 2 files. It
+  refuses what the schema rejects, plus a non-integer version, non-calendar
+  dates and a wire listed twice for one audience. `#digest` is the SHA-256
+  of the canonical render. The JSON layout is pinned by explicit generator
+  options.
+- **`standard_flags:manifest:check BASE= [BASE_OPTIONAL=1]`** for server
+  CI (`StandardFlags::Tooling::ManifestCheck`).
+  - Exit 1 when the committed manifest is stale or missing (CRLF line
+    endings and trailing newlines are tolerated), with the changes listed
+    per flag and tombstone.
+  - Exit 2 when the contract breaks: a wire the baseline told an audience is
+    gone and no tombstone still serves it (`until:` today or later, UTC); a
+    wire changed type; or a public audience serving wires became private.
+  - Exit 2 too when `BASE` is missing or unreadable, unless
+    `BASE_OPTIONAL=1`, or when a manifest can't be read.
+  - Without `BASE` the committed file is the baseline, with a warning.
+  - A deprecated wire past its `until:` may be dropped. An earlier `until:`
+    is a warning.
+  - The README has a CI snippet that fetches the base ref explicitly.
 - **`standard_flags:kotlin`** (`config.kotlin_path`, default
   `config/StandardFlags.kt`; `config.kotlin_package`, default none) writes
   plain Kotlin with no dependencies:
@@ -124,21 +132,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - per mode or experiment exposed to any audience, `enum class
     <Key>Value(val value: String)` with `fromValue`.
 
-  The generated source is ASCII. Clashing wire names fail the task with
-  `Tooling::Kotlin::NameClash`, and an invalid package name raises
-  `ConfigurationError`.
+  The generated source is ASCII. Generation never fails on a clash:
+  - when wires of one audience map to the same name, the snake_case spelling
+    keeps it and other spellings get a suffix from the SHA-256 of their exact
+    spelling;
+  - when values of one flag do, later ones get the first free `_2`, `_3`, …
+
+  `Tooling::Kotlin::NameClash` is left for clashing type names and
+  non-identifiers. An invalid package name raises `ConfigurationError`.
 - **TypeScript:** `standard_flags:typescript` adds a `<Audience>Wire` union
   per audience (deprecated static wires included), `WiresByAudience`, and
-  the OFREP types: `OfrepEvaluationRequest`, `OfrepEvaluationSuccess`,
+  the OFREP types: `OfrepEvaluationRequest` (`appVersion` or `app_version`), `OfrepEvaluationSuccess`,
   `OfrepEvaluationFailure`, `OfrepEvaluation`, `OfrepBulkResponse`,
   `OfrepFlagNotFound`, `OfrepInvalidContext`, `OfrepReason`,
   `OfrepErrorCode` and `OfrepBulkResponseByAudience`. The existing
   interfaces and types are unchanged.
-- **Conformance:** `conformance/wire/manifest_check.json` (suite
-  `manifest_check`, scope `wire`, 18 cases). Each case takes a committed and
-  a current manifest plus today's date, and gives ok/stale/breaking with the
-  removed wires and type changes. A client's contract check shares these
-  semantics.
+- **Conformance:**
+  - `conformance/wire/manifest_check.json` (suite `manifest_check`, scope
+    `wire`, 26 cases). Each case takes a committed and a current manifest
+    plus today's date. It expects `invalid` (naming the manifest to refuse),
+    or ok/stale/breaking with removed wires, type changes and audiences made
+    private. A client's contract check shares these semantics.
+  - `conformance/wire/client_state.json` gains strict-JSON cases: unquoted
+    literals, single quotes, unquoted keys, malformed numbers, trailing
+    commas, raw control characters, invalid escapes, and nesting beyond the
+    new `limits.max_nesting` (100). It also gains a version rule: a
+    `metadata.version` is kept only when it is printable ASCII without a
+    space or `"`.
 
 ### Changed
 

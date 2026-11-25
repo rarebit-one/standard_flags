@@ -27,6 +27,8 @@ enum class MobileFeature(val wire: String, val type: FeatureType) {
     CHAT_ENABLED("chatEnabled", FeatureType.BOOLEAN),
     @Deprecated("No longer declared; served as a static value through 2027-03-01")
     CHAT_MODE("chatMode", FeatureType.STRING),
+    /** Wire chatV1 (another spelling has CHAT_V1). */
+    CHAT_V1_2228882F("chatV1", FeatureType.BOOLEAN),
     @Deprecated("No longer declared; served as a static value through 2027-03-01")
     CHAT_V1("chat_v1", FeatureType.BOOLEAN),
     /** Values: [HomeHeroValue]. */
@@ -56,6 +58,8 @@ enum class WebFeature(val wire: String, val type: FeatureType) {
     NEW_CHECKOUT("newCheckout", FeatureType.BOOLEAN),
     /** Values: [StrictGatesValue]. */
     STRICT_GATES("strict_gates", FeatureType.STRING),
+    /** Values: [ThemeValue]. */
+    THEME("theme", FeatureType.STRING),
     ;
 
     companion object {
@@ -69,8 +73,8 @@ enum class HomeHeroValue(val value: String) {
     SAVE_5("save \$5"),
     CONTR_LE("contr\u00F4le"),
     A_B_C("a\"b\\c"),
-    CONTROL_A_5("control-a"),
-    CONTROL_A_6("control_a"),
+    CONTROL_A("control-a"),
+    CONTROL_A_2("control_a"),
     ;
 
     companion object {
@@ -99,5 +103,19 @@ enum class StrictGatesValue(val value: String) {
 
     companion object {
         fun fromValue(value: String?): StrictGatesValue? = values().firstOrNull { it.value == value }
+    }
+}
+
+/** Values of web: theme. */
+enum class ThemeValue(val value: String) {
+    A_B("a_b"),
+    A_B_2("a-b"),
+    A_B_2_2("a_b_2"),
+    V_1("1"),
+    V_1_2("v_1"),
+    ;
+
+    companion object {
+        fun fromValue(value: String?): ThemeValue? = values().firstOrNull { it.value == value }
     }
 }

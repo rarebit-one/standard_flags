@@ -3,7 +3,8 @@
 # and their escapes, identifiers, numbers, punctuation) and parses exactly
 # the subset the generator emits (a package line, `object` with `const val`s,
 # and enum classes with entries, annotations and a companion object of
-# one-line functions). Anything else is an error. The kotlinc example in
+# one-line functions). Anything else is an error, and so is a name declared
+# twice: a type name in the file, or an entry name in one enum. The kotlinc example in
 # spec/standard_flags/tooling_kotlin_spec.rb compiles the same output when
 # a compiler is available.
 module KotlinSyntax
@@ -96,6 +97,7 @@ module KotlinSyntax
     def initialize(tokens)
       @tokens = tokens
       @at = 0
+      @types = []
     end
 
     def file
@@ -117,7 +119,7 @@ module KotlinSyntax
 
     def object
       take("object")
-      ident
+      declare_type(ident)
       take("{")
       until peek?("}")
         take("const")
@@ -135,7 +137,7 @@ module KotlinSyntax
     def enum
       take("enum")
       take("class")
-      ident
+      declare_type(ident)
       parameters if peek?("(")
       take("{")
       entries
@@ -161,9 +163,12 @@ module KotlinSyntax
     end
 
     def entries
+      names = []
       until peek?(";") || peek?("}")
         annotation while peek?("@")
-        ident
+        name = ident
+        fail_at("enum entry #{name} is declared twice", @tokens[@at - 1]) if names.include?(name)
+        names << name
         arguments if peek?("(")
         break unless peek?(",")
 
@@ -228,6 +233,11 @@ module KotlinSyntax
       take("==")
       ident
       take("}")
+    end
+
+    def declare_type(name)
+      fail_at("type #{name} is declared twice", @tokens[@at - 1]) if @types.include?(name)
+      @types << name
     end
 
     def type

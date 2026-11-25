@@ -70,14 +70,16 @@ module StandardFlags
         end
       end
 
-      # A parsed manifest of either version: the document as given and the
-      # wires it declares, `{ audience => { wire => Wire } }`.
+      # A parsed manifest of either version: the document as given, the wires
+      # it declares (`{ audience => { wire => Wire } }`) and its audiences
+      # (`{ audience => public? }`; empty for version 1, which didn't say).
       class Document
-        attr_reader :version, :data, :wires
+        attr_reader :version, :data, :wires, :audiences
 
         def initialize(data)
           @data = data
           @version = data["version"]
+          @audiences = Manifest.audiences_in(data)
           @wires = Manifest.wires_in(data)
           freeze
         end
@@ -92,14 +94,22 @@ module StandardFlags
       end
 
       # A Document from a JSON String or an already-parsed Hash. Raises
-      # Unreadable.
+      # Unreadable for anything conformance/schema/manifest.schema.json
+      # rejects, and for what a schema can't say: a version written as a
+      # non-integer (`2.0`), dates that aren't calendar dates, and a wire
+      # listed twice for one audience (by two flags, a flag and a tombstone,
+      # or twice in one list), which the registry never writes.
       def self.read(source)
         data = source.is_a?(String) ? JSON.parse(source) : source
         raise Unreadable, "the manifest is not a JSON object" unless data.is_a?(Hash)
 
         version = data["version"]
-        unless READABLE_VERSIONS.include?(version)
+        unless version.is_a?(Integer) && READABLE_VERSIONS.include?(version)
           raise Unreadable, "unknown manifest version #{version.inspect} (this gem reads #{READABLE_VERSIONS.join(' and ')})"
+        end
+        if version >= 2
+          missing = %w[audiences flags tombstones].reject { |field| data.key?(field) }
+          raise Unreadable, "a version #{version} manifest needs #{missing.join(', ')}" unless missing.empty?
         end
 
         Document.new(data)
@@ -107,30 +117,59 @@ module StandardFlags
         raise Unreadable, "the manifest is not valid JSON (#{e.message.lines.first.to_s.strip})"
       end
 
+      # `{ audience => public? }` from a version 2 manifest's `audiences`.
+      def self.audiences_in(data)
+        return {}.freeze unless data["version"].to_i >= 2
+
+        audiences = data["audiences"]
+        raise Unreadable, "audiences is not an object" unless audiences.is_a?(Hash)
+
+        audiences.to_h do |name, options|
+          public = options.is_a?(Hash) ? options["public"] : nil
+          raise Unreadable, "audiences.#{name} needs \"public\": true or false" unless [ true, false ].include?(public)
+
+          [ name, public ]
+        end.freeze
+      end
+
       # `{ audience => { wire => Wire } }` for a version 1 or 2 manifest.
       def self.wires_in(data)
         wires = Hash.new { |hash, audience| hash[audience] = {} }
+        add = lambda do |wire, owner|
+          if wires[wire.audience].key?(wire.name)
+            raise Unreadable, "wire #{wire} is listed twice (#{owner}); a manifest tells an audience each wire once"
+          end
+
+          wires[wire.audience][wire.name] = wire
+        end
         list(data, "flags").each do |flag|
           key = string!(flag, "key")
-          type = flag_type(flag)
+          type = flag_type(data["version"], flag)
           flag_wires(data["version"], flag).each do |audience, names|
             names.each do |name|
-              wires[audience][name] = Wire.new(audience: audience, name: name, type: type, source: :flag, key: key, until: nil)
+              add.call(Wire.new(audience: audience, name: name, type: type, source: :flag, key: key, until: nil), "flag #{key}")
             end
           end
         end
         list(data, "tombstones").each do |tombstone|
           key = string!(tombstone, "key")
-          serve = tombstone.fetch("serve", {})
-          raise Unreadable, "tombstone #{key} serve is not an object" unless serve.is_a?(Hash)
+          date!(tombstone["removed"], "tombstone #{key} removed") if data["version"] >= 2 || tombstone.key?("removed")
+          unless tombstone.key?("serve")
+            raise Unreadable, "tombstone #{key} has until or until_clients without serve" if tombstone.key?("until") || tombstone.key?("until_clients")
 
-          last = tombstone["until"] && date!(tombstone["until"], "tombstone #{key} until")
+            next
+          end
+          serve = tombstone["serve"]
+          raise Unreadable, "tombstone #{key} serve is not a non-empty object" unless serve.is_a?(Hash) && !serve.empty?
+          raise Unreadable, "tombstone #{key} serve needs until (the last day its wires are served)" unless tombstone.key?("until")
+
+          last = date!(tombstone["until"], "tombstone #{key} until")
           serve.each do |audience, statics|
             raise Unreadable, "tombstone #{key} serve.#{audience} is not an object" unless statics.is_a?(Hash)
 
             statics.each do |name, value|
-              wires[audience][name] = Wire.new(audience: audience, name: name, type: value_type(value, "tombstone #{key} #{name}"),
-                                               source: :static, key: key, until: last)
+              add.call(Wire.new(audience: audience, name: name, type: value_type(value, "tombstone #{key} #{name}"),
+                                source: :static, key: key, until: last), "tombstone #{key}")
             end
           end
         end
@@ -159,6 +198,10 @@ module StandardFlags
         raise Unreadable, "flag #{flag['key']} audiences is not an object" unless audiences.is_a?(Hash)
 
         audiences.to_h do |audience, names|
+          if version >= 2 && !(names.is_a?(Array) && !names.empty?)
+            raise Unreadable, "flag #{flag['key']} audiences.#{audience} is not a non-empty array of wire names"
+          end
+
           names = Array(names)
           raise Unreadable, "flag #{flag['key']} lists a wire for #{audience} that is not a string" unless names.all?(String)
 
@@ -166,15 +209,35 @@ module StandardFlags
         end
       end
 
-      # A flag's `type`, or (for a version 1 file written before `type`
-      # existed) boolean when every value is one.
-      def self.flag_type(flag)
+      # A flag's `type`. Version 2 requires it, with values (and default and
+      # final) of that type. A version 1 file written before `type` existed
+      # reads as boolean when every value is one.
+      def self.flag_type(version, flag)
         type = flag["type"]
+        if version >= 2
+          raise Unreadable, "flag #{flag['key']} has an unknown type #{type.inspect}" unless TYPES.include?(type)
+
+          check_values!(flag, type)
+          return type
+        end
         return type if TYPES.include?(type)
         raise Unreadable, "flag #{flag['key']} has an unknown type #{type.inspect}" unless type.nil?
 
         values = Array(flag["values"])
         !values.empty? && values.all? { |value| [ true, false ].include?(value) } ? "boolean" : "string"
+      end
+
+      def self.check_values!(flag, type)
+        typed = type == "boolean" ? ->(value) { [ true, false ].include?(value) } : ->(value) { value.is_a?(String) }
+        values = flag["values"]
+        unless values.is_a?(Array) && values.size >= 2 && values.all?(&typed) && values.uniq.size == values.size
+          raise Unreadable, "flag #{flag['key']} values must list at least two unique #{type} values"
+        end
+
+        default = flag["default"]
+        defaults = default.is_a?(Hash) ? default.values : [ default ]
+        raise Unreadable, "flag #{flag['key']} default is not a #{type}" unless defaults.all?(&typed)
+        raise Unreadable, "flag #{flag['key']} final is not a #{type}" if flag.key?("final") && !typed.call(flag["final"])
       end
 
       def self.value_type(value, label)
@@ -184,10 +247,13 @@ module StandardFlags
         raise Unreadable, "#{label} serves #{value.inspect}, which is neither a boolean nor a string"
       end
 
+      # A YYYY-MM-DD calendar date (2026-02-30 is refused).
       def self.date!(value, label)
-        Date.iso8601(value.to_s)
+        raise Date::Error unless value.is_a?(String) && value.match?(/\A\d{4}-\d{2}-\d{2}\z/)
+
+        Date.iso8601(value)
       rescue Date::Error
-        raise Unreadable, "#{label} #{value.inspect} is not a YYYY-MM-DD date"
+        raise Unreadable, "#{label} #{value.inspect} is not a YYYY-MM-DD calendar date"
       end
 
       def initialize(registry: StandardFlags.registry)
@@ -203,12 +269,21 @@ module StandardFlags
         }
       end
 
-      def render
-        "#{JSON.pretty_generate(to_h)}\n"
+      # The generator options are spelled out (they are JSON.pretty_generate's)
+      # so the bytes, and the digest, don't depend on the json gem's defaults.
+      FORMAT = { indent: "  ", space: " ", object_nl: "\n", array_nl: "\n" }.freeze
+
+      def self.format(data)
+        "#{JSON.generate(data, FORMAT)}\n"
       end
 
-      # The SHA-256 (hex) of `render`: the committed file's bytes, which
-      # generated client code names in its header.
+      def render
+        self.class.format(to_h)
+      end
+
+      # The SHA-256 (hex) of `render`: the canonical manifest (LF line
+      # endings, ending in one newline), which generated client code names
+      # in its header.
       def digest
         Digest::SHA256.hexdigest(render)
       end
