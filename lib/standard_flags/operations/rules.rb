@@ -145,17 +145,23 @@ module StandardFlags
 
     # Replaces the rule's conditions: `platforms:` (client platforms that
     # may get the percentage and variants), `versions:` (a version range per
-    # platform) and `segments:` (`{ name => value }`, asked of
-    # `config.segment_resolver`, in order). Omitted ones are cleared.
+    # platform), `builds:` (a build-number range per platform) and
+    # `segments:` (`{ name => value }`, asked of `config.segment_resolver`,
+    # in order). Omitted ones are cleared.
+    #
+    # Version ranges are stored in the neutral syntax (`">=1.4.0 <2.0.0"`);
+    # a RubyGems requirement (`"~> 1.4"`, `">= 1.4, < 2"`) is accepted and
+    # stored translated.
     class SetConditions < Base
-      arguments optional: %i[platforms versions segments]
+      arguments optional: %i[platforms versions builds segments]
 
       private
 
       def event = Events::FLAG_EVENTS[:conditions_set]
 
       def perform
-        conditions = { "platforms" => platforms, "versions" => versions, "segments" => segments }.reject { |_, v| v.empty? }
+        conditions = { "platforms" => platforms, "versions" => versions, "builds" => builds, "segments" => segments }
+                     .reject { |_, v| v.empty? }
         validate.conditions_size!(conditions, config)
         save!(conditions: conditions)
         nil
@@ -175,6 +181,13 @@ module StandardFlags
         raise Failure.new(:invalid, "versions must be a Hash of platform => range") unless ranges.is_a?(Hash)
 
         ranges.to_h { |platform, range| [ platform.to_s.downcase, validate.version_range!(range) ] }
+      end
+
+      def builds
+        ranges = arg(:builds) || {}
+        raise Failure.new(:invalid, "builds must be a Hash of platform => range") unless ranges.is_a?(Hash)
+
+        ranges.to_h { |platform, range| [ platform.to_s.downcase, validate.build_range!(range) ] }
       end
 
       def segments

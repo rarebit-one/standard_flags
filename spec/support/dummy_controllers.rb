@@ -69,3 +69,83 @@ class LegacyController < DummyBaseController
     render plain: "unavailable: #{denial.feature} (#{denial.status})", status: denial.status
   end
 end
+
+# Client context and FeatureDisabled.
+class ClientFeaturesController < DummyBaseController
+  def index
+    render json: { features: standard_flags_payload(:mobile), client: standard_flags_client.to_h }
+  end
+
+  def checkout
+    StandardFlags.require!(:new_checkout, for: standard_flags_request_context)
+    render plain: "checkout"
+  end
+
+  def raise_disabled
+    raise StandardFlags::FeatureDisabled.new(:new_checkout, status: 404)
+  end
+
+  def reader
+    render plain: standard_flags_reader.on?(:new_checkout).to_s
+  end
+
+  def late
+    render plain: "late"
+    raise StandardFlags::FeatureDisabled, :new_checkout
+  end
+
+  private
+
+  def standard_flags_context
+    { account: "acct_1" }
+  end
+end
+
+class PinnedClientController < DummyBaseController
+  requires_flag :new_checkout
+
+  def index
+    render plain: "pinned"
+  end
+
+  private
+
+  def standard_flags_context
+    StandardFlags::Context.new(actors: { account: "acct_1" }, client: { platform: "ios", version: "9.0.0" })
+  end
+end
+
+# An app handler for StandardError declared after the include, as an
+# ApplicationController's error handling usually is.
+class RescuingController < DummyBaseController
+  rescue_from StandardError, with: :render_500
+
+  def disabled
+    raise StandardFlags::FeatureDisabled, :new_checkout
+  end
+
+  def boom
+    raise ArgumentError, "boom"
+  end
+
+  private
+
+  def render_500(_error)
+    render plain: "app 500", status: 500
+  end
+end
+
+# An app that takes FeatureDisabled over with its own handler.
+class TargetedController < DummyBaseController
+  rescue_from StandardFlags::FeatureDisabled, with: :render_own
+
+  def disabled
+    raise StandardFlags::FeatureDisabled, :new_checkout
+  end
+
+  private
+
+  def render_own(error)
+    render plain: "own #{error.feature}", status: 451
+  end
+end

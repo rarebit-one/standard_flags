@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Client context.** `StandardFlags::Client` (platform, version, build), a
+  frozen Hash subclass, so `context.client` keeps 0.2.2's Hash reads, with
+  typed readers. `Client.from_headers(headers)` reads `X-Client-Platform`,
+  `X-Client-Version` and `X-Client-Build` (`config.client_headers`); the
+  platform is downcased and must be in `config.client_platforms` (default
+  android, ios, web, desktop), the version must parse and the build must be
+  1 to 18 digits. A bad version or build is dropped; a bad platform becomes
+  `"unknown"`, which fails every platform-scoped rule condition. Each emits
+  `client_invalid.standard_flags`; nothing raises (invalid UTF-8 included)
+  or reports. No headers gives an empty client, which rules read as 0.2.2
+  read an empty client.
+- `StandardFlags::Controller` reads the headers once per request
+  (`standard_flags_client`; empty when there is no request) and evaluates
+  guards and payloads for `standard_flags_context` plus that client, unless
+  the context already names one. `standard_flags_request_context` and
+  `standard_flags_reader` give actions the same context.
+  `config.read_client_headers = false` opts out.
+- `Context.wrap(value, client:)` and `Context#with_client`, so `for:` can
+  carry a client. Jobs' `requires_flag` takes `client:` (a value or a lambda
+  run in the job), and the MCP tools take `client:`
+  (`StandardFlags::MCP.tools(client:)`).
+- **Versions and portable ranges.** `StandardFlags::Version` (SemVer 2.0 with
+  `MAJOR.MINOR` and `MAJOR` shorthands, SemVer precedence, build metadata
+  ignored) and `StandardFlags::VersionRange`: space-separated comparators
+  (`>=`, `>`, `<=`, `<`, `=`), all of which must hold, with `||`
+  alternatives, e.g. `>=1.4.0 <2.0.0 || =0.9.5-beta.1`. Kotlin and
+  TypeScript clients can implement the same syntax.
+- **Build conditions.** Runtime rules take `conditions.builds`
+  (`{ platform => range }` over integers, e.g. `>=120 <200`, as
+  `StandardFlags::BuildRange`), checked with version ranges; both must hold.
+  `SetConditions` and `Testing.rule` take `builds:`.
+- **`StandardFlags::FeatureDisabled`**, a raisable `feature_disabled` with
+  the flag's `key`, wire name (`feature`) and `status` (403), and
+  `StandardFlags.require!(key, for:)`, which raises it.
+  `StandardFlags::Controller` renders it exactly like a `requires_flag`
+  denial, through `config.controller_responder` when set, even when the app
+  declares `rescue_from StandardError` after the include; a 404 one answers
+  like `error: :not_found`.
+- **Gated MCP tools.** `StandardFlags::MCP::Gated` gives an app's own tools
+  `requires_flag :key` (with optional `for:` and `client:`), in every
+  subclass. A call while a flag is off returns
+  `{"error":{"code":"feature_disabled",...}}` without running the tool.
+  `StandardFlags::MCP.visible(tools, actor:, context:, client:)` leaves such
+  tools out of `tools/list`, and `StandardFlags::MCP.call(tool, arguments,
+  actor:, context:, client:)` calls with the same evaluation. The gate is
+  evaluated once per call, however deep the subclasses. A `FeatureDisabled`
+  raised inside any tool becomes that error. The gem's own tools are not
+  gated.
+- Conformance: `runtime/client.json` (neutral ranges, prerelease ordering,
+  shorthand versions, build ranges, no-platform and unknown-platform
+  clients; RubyGems cases marked `"scope": "server"`),
+  `versions/version_ranges.json` (versions and builds, for non-Ruby
+  clients; also run through the server's read path, with the five cases
+  where the server's RubyGems fallback differs marked `server_matched`) and
+  the server-only `versions/legacy_ranges.json`. Every existing
+  runtime case with a version range also runs with the range in canonical
+  neutral form.
+
+### Changed
+
+- Client conditions in runtime rules compare with `StandardFlags::Version`
+  and `VersionRange`. Ranges stored by 0.2.x that only RubyGems can read
+  evaluate exactly as `Gem::Requirement` did: translated where the neutral
+  syntax can hold them (`~> 1.4` reads as `>=1.4.0 <2.0.0-0`, so
+  `2.0.0-beta.1` still misses it), and evaluated by RubyGems otherwise
+  (`>= 1.4.0.1`, and any prerelease operand such as `= 1.4.0.beta`, which
+  RubyGems orders differently). A string valid in both syntaxes
+  (`>= 1.4.0`, `>= 1.0.0-alpha`) is read as neutral, so SemVer client
+  versions compare by SemVer. A client version outside SemVer (`1.4.0.1`,
+  `1.4.0.beta`, a `Gem::Version`, a Float) is still read by RubyGems against
+  any range RubyGems can read. Ranges only the neutral syntax can read
+  compare SemVer only.
+- Deliberate: build metadata in a client version passed in a context's
+  client Hash is ignored, as SemVer says, so `version: "1.4.0+381"` now
+  meets `~> 1.4` and `>= 1.4`; 0.2.2 refused it. The header path accepts it
+  too.
+- `SetConditions` stores version ranges in the neutral syntax where it can:
+  a neutral range as given, a RubyGems one translated (`">= 1.4, < 2"` is
+  stored as `">=1.4.0 <2.0.0"`), and one the neutral syntax can't hold as
+  given.
+- `Context.wrap(value, client: {})` leaves the context's client as it is,
+  as `client: nil` does.
+- `requires_flag` denials' `feature` is always a String.
+- README: the header, results, roadmap and health-check notes describe
+  0.2.2 rather than 0.1.0.
+
+### Removed
+
+- `StandardFlags::Operations::SCOPES`, an unused constant. The scopes are
+  the strings `config.authorize` receives.
+
 ## [0.2.2] - 2026-11-23
 
 ### Changed

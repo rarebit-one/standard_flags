@@ -1,12 +1,16 @@
 module StandardFlags
   # Who and what a flag is being evaluated for: one actor per unit, an
-  # optional environment override, and the calling client (platform, version,
-  # build). Runtime rules and client targeting read these in later phases;
-  # today they only feed the per-unit-of-work memo key.
+  # optional environment override, and the calling client (a
+  # StandardFlags::Client: platform, version, build), which runtime rules'
+  # client conditions read.
   #
   #   StandardFlags.on?(:new_checkout, for: account)                # a single target
   #   StandardFlags.on?(:new_checkout, for: { account: account, organization: org })
   #   StandardFlags.on?(:new_checkout, for: StandardFlags::Context.new(env: "staging"))
+  #   StandardFlags.on?(:new_checkout, for: StandardFlags::Context.wrap(account, client: client))
+  #
+  # `client:` takes a Client or a Hash (`{ platform:, version:, build: }`);
+  # `context.client[:platform]` reads the value as given either way.
   #
   # The memo key covers env, target, actors and client, so two clients in one
   # unit of work never share an answer once rules target platform or version.
@@ -17,13 +21,18 @@ module StandardFlags
   class Context
     attr_reader :actors, :target, :env, :client, :cache_key
 
-    def self.wrap(value)
-      case value
-      when Context then value
-      when nil then empty
-      when Hash then new(actors: value)
-      else new(target: value)
-      end
+    # A Context from a Context, a Hash of actors, a single target or nil.
+    # `client:` (a Client or a Hash) replaces the context's client when
+    # given and not empty; nil and `{}` both leave it as it is.
+    def self.wrap(value, client: nil)
+      context =
+        case value
+        when Context then value
+        when nil then empty
+        when Hash then new(actors: value)
+        else new(target: value)
+        end
+      client.nil? || (client.respond_to?(:empty?) && client.empty?) ? context : context.with_client(client)
     end
 
     def self.empty
@@ -34,14 +43,22 @@ module StandardFlags
       @actors = actors.transform_keys(&:to_sym).freeze
       @target = target
       @env = env&.to_s
-      @client = client.transform_keys(&:to_sym).freeze
+      @client = Client.wrap(client)
       @cache_key = [
         @env,
         identity(@target),
         @actors.sort.map { |unit, actor| [ unit, identity(actor) ] },
-        @client.sort
+        @client.to_h.sort
       ].freeze
       freeze
+    end
+
+    # The same context for another client.
+    def with_client(client)
+      client = Client.wrap(client)
+      return self if client == @client
+
+      self.class.new(actors: actors, target: target, env: env, client: client)
     end
 
     def actor(unit)

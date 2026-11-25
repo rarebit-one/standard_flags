@@ -14,6 +14,14 @@ module StandardFlags
   # `retry_on` can reschedule; `retry: false` (the default) discards the job
   # without running it. `for:` is evaluated in the job instance.
   #
+  # `client:` evaluates the flag for a client too (a StandardFlags::Client
+  # or a `{ platform:, version:, build: }` Hash, or a lambda evaluated in the
+  # job instance that returns one), for a job working on behalf of a mobile
+  # or device request. Jobs never read request headers; pass the client the
+  # request saw (`client.to_h` serialises).
+  #
+  #   requires_flag :new_importer, for: -> { arguments.first }, client: -> { arguments.second }
+  #
   # `error:` raises your own exception instead, for jobs that already
   # `retry_on` (or `discard_on`) it:
   #
@@ -28,12 +36,13 @@ module StandardFlags
   module Job
     extend ActiveSupport::Concern
 
-    OPTIONS = %i[retry for error].freeze
+    OPTIONS = %i[retry for error client].freeze
 
     class_methods do
       def requires_flag(key, **options)
         retryable = options.fetch(:retry, false)
         context = options[:for]
+        client = options[:client]
         error = options[:error]
         unknown = options.keys - OPTIONS
         raise ArgumentError, "unknown option(s): #{unknown.map(&:inspect).join(', ')}" unless unknown.empty?
@@ -42,6 +51,8 @@ module StandardFlags
 
         before_perform do
           target = context.respond_to?(:call) ? instance_exec(&context) : context
+          calling = client.respond_to?(:call) ? instance_exec(&client) : client
+          target = Context.wrap(target, client: calling) unless calling.nil?
           next if StandardFlags.reader(for: target).enabled?(key)
 
           standard_flags_raise!(key, error) if error

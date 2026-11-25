@@ -30,6 +30,11 @@ module StandardFlags
     attr_accessor :controller_responder
     # Whose wire name `requires_flag` reports in `meta.feature`.
     attr_accessor :default_audience
+    # Client context. StandardFlags::Controller reads the calling client from
+    # these request headers (`{ platform:, version:, build: }` => header
+    # name) unless `read_client_headers` is false; a platform outside
+    # `client_platforms` is dropped.
+    attr_accessor :client_headers, :client_platforms, :read_client_headers
     # Runtime rules (rules stored in the app's database, between the ENV pin
     # and the code default). Off by default; when off, nothing touches a
     # database and ActiveRecord is never loaded. Turn on only after running
@@ -73,6 +78,8 @@ module StandardFlags
     # how often (seconds) it writes.
     attr_accessor :track_evaluations, :evaluation_tracking_interval
 
+    DEFAULT_CLIENT_HEADERS = { platform: "X-Client-Platform", version: "X-Client-Version", build: "X-Client-Build" }.freeze
+    DEFAULT_CLIENT_PLATFORMS = %w[android ios web desktop].freeze
     DEFAULT_AUTHORIZE = ->(actor, _scope, _key) { actor.is_a?(Actor) && actor.system? }
     DEFAULT_ACTOR_RESOLVER = -> { ::Current.user if defined?(::Current) && ::Current.respond_to?(:user) }
 
@@ -92,6 +99,9 @@ module StandardFlags
       @typescript_path = "app/javascript/types/standard_flags.d.ts"
       @controller_responder = nil
       @default_audience = :web
+      @client_headers = DEFAULT_CLIENT_HEADERS
+      @client_platforms = DEFAULT_CLIENT_PLATFORMS
+      @read_client_headers = true
       @runtime_rules = false
       @refresh_interval = 5
       @runtime_store = nil

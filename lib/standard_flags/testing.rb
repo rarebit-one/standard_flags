@@ -64,14 +64,16 @@ module StandardFlags
       #   Testing.rule(:home_hero, variants: { "control" => 5_000, "savings" => 5_000 })
       #   Testing.rule(:new_checkout, status: :stopped, stop: true)
       #   Testing.rule(:new_checkout, cohorts: { staff: true }, platforms: %w[ios], versions: { ios: ">= 2.0" })
+      #   Testing.rule(:new_checkout, percentage: 10_000, builds: { android: ">=120" })
       #
       # The salt and hash version default to the flag's `bucketing:` or to
       # (key, 2).
       def rule(key, status: :running, percentage: nil, rollout: nil, variants: nil, fallthrough: nil, stop: nil,
-               cohorts: nil, segments: nil, platforms: nil, versions: nil, salt: nil, hash_version: nil)
+               cohorts: nil, segments: nil, platforms: nil, versions: nil, builds: nil, salt: nil, hash_version: nil)
         definition = definition_for(key, nil)
         conditions = { "segments" => segment_list(segments), "platforms" => platforms&.map(&:to_s),
-                       "versions" => versions&.to_h { |platform, range| [ platform.to_s, range.to_s ] } }.compact
+                       "versions" => versions&.to_h { |platform, range| [ platform.to_s, range.to_s ] },
+                       "builds" => builds&.to_h { |platform, range| [ platform.to_s, range.to_s ] } }.compact
         attributes = {
           status: status, percentage_bps: percentage, rollout_value: rollout, variant_weights: variants || {},
           fallthrough_value: fallthrough, stop_value: stop, conditions: conditions, cohorts: cohorts || [],
