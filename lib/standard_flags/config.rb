@@ -23,9 +23,12 @@ module StandardFlags
     # Where `flags:refs` looks for flag reads.
     attr_accessor :refs_paths
     attr_accessor :refs_extensions
-    # Outputs of `standard_flags:manifest` and `standard_flags:typescript`.
+    # Outputs of `standard_flags:manifest`, `standard_flags:typescript` and
+    # `standard_flags:kotlin`. `kotlin_package` is the generated file's
+    # package (nil writes none).
     attr_accessor :manifest_path
     attr_accessor :typescript_path
+    attr_accessor :kotlin_path, :kotlin_package
     # `call(controller, denial)` replaces the default `requires_flag` response.
     attr_accessor :controller_responder
     # Whose wire name `requires_flag` reports in `meta.feature`.
@@ -113,6 +116,8 @@ module StandardFlags
       @refs_extensions = %w[rb erb rake haml slim jbuilder]
       @manifest_path = "config/flags.manifest.json"
       @typescript_path = "app/javascript/types/standard_flags.d.ts"
+      @kotlin_path = "config/StandardFlags.kt"
+      @kotlin_package = nil
       @controller_responder = nil
       @default_audience = :web
       @client_headers = DEFAULT_CLIENT_HEADERS

@@ -18,7 +18,9 @@ conditions, a raisable `FeatureDisabled`, flag-gated MCP tools and
 [client delivery](#client-delivery) (an OFREP endpoint mixin, bootstrap
 embeds, minimum client versions and deprecated wires). Unreleased on `main`:
 [client upgrades](#client-upgrades) (a client registry, `GET /client/status`,
-a 426 guard and measured compatibility windows). See [Roadmap](#roadmap).
+a 426 guard and measured compatibility windows) and the
+[client contract](#client-contract) (manifest version 2, a CI check, Kotlin
+and TypeScript generators). See [Roadmap](#roadmap).
 
 - [Install](#install)
 - [Declaring flags](#declaring-flags)
@@ -32,6 +34,7 @@ a 426 guard and measured compatibility windows). See [Roadmap](#roadmap).
 - [Client payload](#client-payload)
 - [Client delivery](#client-delivery)
 - [Client upgrades](#client-upgrades)
+- [Client contract](#client-contract)
 - [Rake tasks](#rake-tasks)
 - [Observability](#observability)
 - [Health check and diagnostics](#health-check-and-diagnostics)
@@ -1558,7 +1561,9 @@ date in UTC, so every host switches the wire off at the same moment. With
 receiving it sooner. A client of unknown version keeps receiving it until
 `until:`; `until_clients:` never extends it. A static wire can't reuse a
 live wire name. Once `until:` has passed, `flags:stale` lists
-the `serve:` block as removable.
+the `serve:` block as removable. `standard_flags:manifest:check` fails CI
+when a client wire disappears without such a tombstone
+([Client contract](#client-contract)).
 
 ### Before sign-in
 
@@ -1816,6 +1821,232 @@ platform, or its oldest version seen is at or above it). Until tracking is
 14 days old it says "not enough data" with the date tracking began. The
 diagnostics (`compat:`, with `tracking_since` and `last_flushed_at`) and the MCP `get_flag` tool
 show the window and the stored counts.
+## Client contract
+
+The committed manifest is the contract between the server and the clients
+built against it. `standard_flags:manifest` writes it, `standard_flags:manifest:check`
+keeps server CI honest about it, and the Kotlin and TypeScript generators
+turn it into client types.
+
+### The manifest (version 2)
+
+`bin/rails standard_flags:manifest` writes `config.manifest_path` (default
+`config/flags.manifest.json`). Commit it.
+
+```json
+{
+  "version": 2,
+  "audiences": { "mobile": { "public": false }, "pre_auth": { "public": true } },
+  "flags": [
+    { "key": "ai_assistant", "kind": "kill_switch", "type": "boolean", "values": [true, false],
+      "default": true, "audiences": { "mobile": ["chat", "chatEnabled"] }, "min_client": {} },
+    { "key": "new_checkout", "kind": "flag", "type": "boolean", "values": [true, false],
+      "default": { "*": false, "staging": true }, "audiences": { "mobile": ["newCheckout"] },
+      "min_client": { "android": "0.4.0" }, "permanent": false, "remove_by": "2027-03-01", "final": true }
+  ],
+  "tombstones": [
+    { "key": "chat_v1", "removed": "2026-12-01", "serve": { "mobile": { "chat_v1": false } },
+      "until": "2027-03-01", "until_clients": { "android": "0.6.0" } }
+  ],
+  "clients": {
+    "android_app": { "platform": "android", "group": null, "min_version": "0.4.0", "since": "2026-12-01",
+                     "grace": 7, "recommended": "0.5.0", "available": "0.5.0",
+                     "store_url": "https://example.com/app", "store_lookup": false }
+  }
+}
+```
+
+- `audiences` lists every audience a flag or tombstone serves, plus any
+  `config.audiences` declares, and whether each is served before sign-in.
+- A flag's `audiences` gives every wire name per audience, aliases included,
+  in declared order. `type` is the wire's JSON type: `boolean`, or `string`
+  for modes and experiments. `default` is a value, or per environment with
+  `"*"` for the rest.
+- `min_client` is always present (`{}` without one). `permanent` is on
+  entries of kind `flag` and `mode`; `remove_by` and `final` only when
+  declared.
+- A tombstone with deprecated wires carries `serve`, `until` and
+  `until_clients` (`{}` when not given).
+- `clients` is the [client registry](#the-client-registry) as declared in
+  code, keyed by name. Every attribute is present (null when not declared),
+  `grace` is in whole days, and `store_lookup` only says whether one is
+  configured. ENV break-glass pins and store lookup answers are runtime
+  state and never appear. Client changes only make the manifest stale.
+- `owner:` and `description:` are left out on purpose. Client repositories
+  copy this file, so it holds only what a client can already learn from the
+  wire, plus lifecycle dates. Operators read owners through `flags:list`,
+  `flags:show` and the MCP tools.
+
+The JSON Schema is `conformance/schema/manifest.schema.json`. The reader
+refuses anything the schema rejects, plus what a schema can't say: a
+`version` that isn't the integer 2, dates that aren't calendar dates, and a
+wire listed twice for one audience. Version 1 files (0.3.0 and earlier) are
+still read, so the check can compare an old committed file and report what
+upgrading changes. Regenerate after upgrading the gem.
+
+The file is generated text: keep formatters and line-ending conversion away
+from it. Put `config/flags.manifest.json -text` in `.gitattributes` and the
+path in `.prettierignore`. The check tolerates CRLF line endings and
+trailing newlines; other reformatting makes it stale.
+
+### Checking it in server CI
+
+`bin/rails standard_flags:manifest:check` compares the committed manifest
+with the registry. It exits with:
+
+| Exit | Meaning | Fix |
+|------|---------|-----|
+| 0 | The committed file matches what `standard_flags:manifest` writes (CRLF line endings and trailing newlines aside). | — |
+| 1 | Stale (or missing): the registry changed. The output lists what changed per flag and tombstone. | Run `standard_flags:manifest` and commit. |
+| 2 | The client contract is broken. Either a wire the baseline told an audience is gone without a tombstone serving it, or a wire changed type, or a public audience serving wires became private (clients before sign-in lose them all). | Keep the wire (or the audience public), or tombstone the wire with `serve:` and `until:`, or use a new wire name. |
+| 2 | The baseline given as `BASE=` is missing or unreadable, or a manifest can't be read. | Fix the CI step; see below. |
+
+A wire counts as served by a tombstone only while its `until:` is today or
+later (UTC). A deprecated wire whose `until:` has passed in the baseline may
+be deleted: its window is over. Moving a wire to another flag of the same
+type is fine. Moving it to another audience removes it from the first.
+Two things print a warning without failing:
+- moving a deprecated wire's `until:` earlier, since shipped clients were
+  promised the later date;
+- adding a wire whose generated Kotlin name is an existing wire's in the
+  same audience (`new_checkout` beside a shipped `newCheckout`). See
+  [Kotlin](#kotlin) for how constants stay put.
+
+The baseline is `BASE=`, the base branch's manifest, so a PR that
+regenerates the file in the same commit still can't drop a wire. Without
+`BASE=` the committed file stands in, and the check prints a warning that a
+regenerated file hides removals. A `BASE` file that is missing, a directory
+or unreadable fails with exit 2, and a stale committed file is still
+reported. `BASE_OPTIONAL=1` forgives only a file that doesn't exist: set it
+for first adoption, when the base branch has no manifest yet. The contract
+checks are then skipped, with a warning.
+
+```yaml
+# .github/workflows/ci.yml, in a job with the app's Ruby and database set up.
+- uses: actions/checkout@v4
+- name: Flag manifest
+  env:
+    BASE_REF: ${{ github.base_ref || 'main' }}
+  run: |
+    MANIFEST="$(bin/rails runner 'print StandardFlags.config.manifest_path')"
+    test -n "$MANIFEST" || { echo "could not read config.manifest_path" >&2; exit 1; }
+    git fetch --no-tags --depth=1 origin "$BASE_REF"
+    mkdir -p tmp
+    if git cat-file -e "FETCH_HEAD:$MANIFEST" 2>/dev/null; then
+      git show "FETCH_HEAD:$MANIFEST" > tmp/base.manifest.json
+      bin/rails standard_flags:manifest:check BASE=tmp/base.manifest.json
+    else
+      # First adoption: the base branch has no manifest yet.
+      bin/rails standard_flags:manifest:check BASE=tmp/base.manifest.json BASE_OPTIONAL=1
+    fi
+```
+
+The path comes from `config.manifest_path`, so the step can't look in the
+wrong place. A failed fetch fails the step (the default shell exits on
+error), and `git show` runs only when the file exists at the base, so no
+error turns into a skipped check. In the one PR that moves the manifest,
+pass `BASE=` the old path's contents yourself.
+
+`StandardFlags::Tooling::ManifestCheck` is the same check as a class, for
+apps with their own CI scripts.
+
+### Kotlin
+
+`bin/rails standard_flags:kotlin` writes plain Kotlin (no dependencies) to
+`config.kotlin_path` (default `config/StandardFlags.kt`) in
+`config.kotlin_package` (nil writes no package line):
+
+```kotlin
+// Generated by `bin/rails standard_flags:kotlin`. Do not edit by hand.
+// Manifest version 2, sha256 9c1f….
+
+package com.example.flags
+
+object StandardFlagsManifest {
+    const val VERSION: Int = 2
+    const val SHA256: String = "9c1f…"
+}
+
+enum class FeatureType { BOOLEAN, STRING }
+
+enum class MobileFeature(val wire: String, val type: FeatureType) {
+    CHAT("chat", FeatureType.BOOLEAN),
+    CHAT_ENABLED("chatEnabled", FeatureType.BOOLEAN),
+    @Deprecated("No longer declared; served as a static value through 2027-03-01")
+    CHAT_V1("chat_v1", FeatureType.BOOLEAN),
+    /** Values: [HomeHeroValue]. */
+    HOME_HERO("homeHero", FeatureType.STRING),
+    ;
+
+    companion object {
+        fun fromWire(wire: String): MobileFeature? = values().firstOrNull { it.wire == wire }
+    }
+}
+
+enum class HomeHeroValue(val value: String) {
+    CONTROL("control"),
+    SAVINGS("savings"),
+    ;
+
+    companion object {
+        fun fromValue(value: String?): HomeHeroValue? = values().firstOrNull { it.value == value }
+    }
+}
+```
+
+- There is one `<Audience>Feature` enum per manifest audience, with one
+  entry per wire, ordered by wire name. Deprecated static wires are included
+  and marked `@Deprecated`.
+- There is one `<Key>Value` enum per mode or experiment exposed to any
+  audience, in declared order.
+- Entry names are SCREAMING_SNAKE_CASE (`homeHero` becomes `HOME_HERO`).
+  Values that can't start an identifier get `V_` (`2fa` becomes `V_2FA`).
+- Names are stable across regenerations. The task reads the file it wrote
+  last time (`config.kotlin_path`), and every wire and value keeps the name
+  it had there; only new ones are named. A `new_checkout` alias added after
+  a shipped `newCheckout` gets a suffixed name and never takes
+  `NEW_CHECKOUT`. Delete the file to name everything afresh. Commit it, or
+  restore it in CI before regenerating, so names survive a clean checkout.
+- A new name never fails on a clash:
+  - When two wires of one audience map to the same name (`new_checkout` and
+    `newCheckout`, the alias pair a rename leaves), the spelling that already
+    is the name in some case (`new_checkout`, else `NEW_CHECKOUT`) keeps it,
+    unless an existing wire holds it. Every other spelling gets `_` plus 8
+    hex digits of the SHA-256 of its exact spelling
+    (`NEW_CHECKOUT_1F0A2B3C`), and its KDoc says why.
+  - When two values of one flag map to the same name, later ones in
+    declared order get the first free `_2`, `_3`, and so on.
+- The source is ASCII: every other character is escaped.
+- `SHA256` is `Tooling::Manifest#digest`, the SHA-256 of the canonical
+  manifest: exactly what `standard_flags:manifest` writes, with LF line
+  endings. It equals the committed file's hash when the file is current and
+  untouched by line-ending conversion. A client build can compare it with
+  the server's manifest to tell whether its copy is current.
+
+### TypeScript
+
+`bin/rails standard_flags:typescript` keeps the `<Audience>Features`
+interfaces, `FlagKey` and `FlagValues` as before. It adds, from the
+manifest:
+
+- one `<Audience>Wire` union per audience (deprecated static wires
+  included), and `WiresByAudience`;
+- the OFREP shapes: `OfrepEvaluationRequest` (with `appVersion` or
+  `app_version`), `OfrepEvaluationSuccess<W>`,
+  `OfrepEvaluationFailure<W>`, `OfrepBulkResponse<W>`, `OfrepFlagNotFound`,
+  `OfrepInvalidContext`, `OfrepReason`, `OfrepErrorCode`, and
+  `OfrepBulkResponseByAudience`.
+
+### In client CI
+
+A client copies (or fetches) the server's manifest. The client library's
+contract check compares the wires its generated enums were built from with
+the server's current manifest. It fails on a wire the audience no longer
+exposes or serves, or on a changed type, exactly as server CI does.
+`conformance/wire/manifest_check.json` pins those semantics: committed and
+current manifests and today's date in; ok, stale, removed wires and type
+changes out. The Kotlin library's Gradle task runs it. The server and client
+checks therefore agree on what breaks a shipped build.
 
 ## Rake tasks
 
@@ -1827,8 +2058,10 @@ show the window and the stored counts.
 | `bin/rails flags:set` / `ramp` / `start` / `pause` / `stop` / `members:add` / `members:remove` / `purge` | Break-glass changes through the audited operations ([Rake tasks for break-glass changes](#rake-tasks-for-break-glass-changes)). |
 | `bin/rails flags:restore AT=` | Rules and memberships as they were at `AT`, from the audit log; a dry run unless `APPLY=1` ([Restore](#restore)). |
 | `bin/rails flags:refs` | Scans `config.refs_paths` (default `app lib config`) for `on?(:k`, `off?(:k`, `mode(:k`, `variant(:k`, `evaluate(:k`, `requires_flag :k` and string keys. Exits non-zero for undeclared or tombstoned keys; warns for declared flags nothing reads. Run it in CI. |
-| `bin/rails standard_flags:manifest` | Writes `config/flags.manifest.json`: keys, wire names, kinds, values, audiences and defaults (and `permanent` on entries of kind `flag` and `mode`), deterministically. Commit it. |
-| `bin/rails standard_flags:typescript` | Writes a `.d.ts` with a `Features` interface per audience (`WebFeatures`, `MobileFeatures`, …) keyed by wire name, `FlagKey` and `FlagValues` (every key and its stored values), and the shapes of the MCP tools' results that the [admin page](#admin-page) uses. |
+| `bin/rails standard_flags:manifest` | Writes `config/flags.manifest.json` (version 2): audiences, and per flag its wire names per audience, kind, type, values, defaults, `min_client` and lifecycle; tombstones with their deprecated wires. Deterministic. Commit it ([The manifest](#the-manifest-version-2)). |
+| `bin/rails standard_flags:manifest:check BASE= [BASE_OPTIONAL=1]` | Exits 1 when the committed manifest is stale or missing. Exits 2 when a wire the baseline told a client is gone without a tombstone, a wire changed type, a public audience went private, `BASE` is unavailable, or a manifest can't be read ([Checking it in server CI](#checking-it-in-server-ci)). |
+| `bin/rails standard_flags:kotlin` | Writes `config.kotlin_path`: a `<Audience>Feature` enum per audience, a `<Key>Value` enum per mode and experiment, `FeatureType`, and the manifest's version and digest ([Kotlin](#kotlin)). |
+| `bin/rails standard_flags:typescript` | Writes a `.d.ts` with a `Features` interface per audience (`WebFeatures`, `MobileFeatures`, …) keyed by wire name, a `<Audience>Wire` union per audience, `FlagKey` and `FlagValues` (every key and its stored values), the OFREP request and response types, and the shapes of the MCP tools' results that the [admin page](#admin-page) uses. |
 
 ## Observability
 
@@ -2125,6 +2358,10 @@ platforms, the client registry, header values and today's date in, the
 status payload out (unknown builds, grace, enforcement, prereleases, the
 store ceiling, groups). `upgrade/client_status_server.json` (`"scope":
 "server"`) adds ENV pins and store lookups. None of them needs Ruby to run.
+`wire/manifest_check.json` pins the [client contract](#client-contract)
+check: committed and current manifests in; stale, removed wires and type
+changes out. Its manifests validate against
+`conformance/schema/manifest.schema.json`. None of them needs Ruby to run.
 
 ## Bucketing
 
@@ -2158,8 +2395,10 @@ headers, portable version ranges, build conditions, `FeatureDisabled` and
 gated MCP tools, an OFREP endpoint mixin and an embeddable payload with
 ETags, minimum client versions and deprecated wires, and the portable
 conformance suite, a client registry with `GET /client/status`, a 426 guard,
-grace windows and a store ceiling, and measured compatibility windows. Next:
-the manifest contract checked in client CI and the Kotlin client library. Phase 4 adds
+grace windows and a store ceiling, measured compatibility windows, and the
+client contract (manifest version 2, `standard_flags:manifest:check`, Kotlin
+and TypeScript generators). Next: the Kotlin client library, with the
+manifest check in client CI. Phase 4 adds
 experiment exposure tracking and staged rollout plans with automatic
 halts.
 

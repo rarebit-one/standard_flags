@@ -95,6 +95,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in, the status payload out, for client libraries' upgrade-state parsing.
   `conformance/upgrade/client_status_server.json` (scope `server`) adds ENV
   pins and store lookups.
+- **Manifest version 2.** `standard_flags:manifest` writes `"version": 2`:
+  a top-level `audiences` map (`{ name => { "public" => bool } }`), each
+  flag's `audiences` as `{ audience => [every wire name] }`, `min_client`
+  (always present), `permanent` (kinds `flag` and `mode`), and `remove_by`
+  and `final` when declared. Tombstones with deprecated wires carry `serve`,
+  `until` and `until_clients`. A top-level `clients` object holds the client
+  registry as declared in code (platform, group, min_version, since, grace in
+  days, recommended, available, store_url, and whether a `store_lookup` is
+  configured); ENV pins and lookup answers never appear. `owner:` and `description:` are deliberately
+  left out. The schema ships as `conformance/schema/manifest.schema.json`.
+  `StandardFlags::Tooling::Manifest.read` reads version 1 and 2 files. It
+  refuses what the schema rejects, plus a non-integer version, non-calendar
+  dates and a wire listed twice for one audience. `#digest` is the SHA-256
+  of the canonical render. The JSON layout is pinned by explicit generator
+  options.
+- **`standard_flags:manifest:check BASE= [BASE_OPTIONAL=1]`** for server
+  CI (`StandardFlags::Tooling::ManifestCheck`).
+  - Exit 1 when the committed manifest is stale or missing (CRLF line
+    endings and trailing newlines are tolerated), with the changes listed
+    per flag and tombstone.
+  - Exit 2 when the contract breaks: a wire the baseline told an audience is
+    gone and no tombstone still serves it (`until:` today or later, UTC); a
+    wire changed type; or a public audience serving wires became private.
+  - Exit 2 too when `BASE` is missing or unreadable (a stale committed file
+    is still reported), or when a manifest can't be read. `BASE_OPTIONAL=1`
+    forgives only a `BASE` file that doesn't exist.
+  - Without `BASE` the committed file is the baseline, with a warning.
+  - A deprecated wire past its `until:` may be dropped. An earlier `until:`
+    is a warning, and so is a new wire whose Kotlin name is an existing
+    wire's.
+  - The README has a CI snippet that fetches the base ref explicitly.
+- **`standard_flags:kotlin`** (`config.kotlin_path`, default
+  `config/StandardFlags.kt`; `config.kotlin_package`, default none) writes
+  plain Kotlin with no dependencies:
+  - `StandardFlagsManifest` (`VERSION` and `SHA256` of the manifest);
+  - `FeatureType`;
+  - per audience, `enum class <Audience>Feature(val wire: String, val type:
+    FeatureType)` in wire-name order with `fromWire`, with deprecated static
+    wires marked `@Deprecated`;
+  - per mode or experiment exposed to any audience, `enum class
+    <Key>Value(val value: String)` with `fromValue`.
+
+  The generated source is ASCII.
+
+  Names are stable across regenerations: the task keeps every entry name the
+  existing file has (`Kotlin.new(previous:)`) and names only new wires and
+  values. A new name never fails on a clash:
+  - when wires of one audience map to the same name, the spelling that
+    already is the name (snake_case, else SCREAMING_SNAKE_CASE) keeps it,
+    unless an existing wire holds it, and other spellings get a suffix from
+    the SHA-256 of their exact spelling;
+  - when values of one flag do, later ones get the first free `_2`, `_3`, …
+
+  `Tooling::Kotlin::NameClash` is left for clashing type names and
+  non-identifiers. An invalid package name raises `ConfigurationError`.
+- **TypeScript:** `standard_flags:typescript` adds a `<Audience>Wire` union
+  per audience (deprecated static wires included), `WiresByAudience`, and
+  the OFREP types: `OfrepEvaluationRequest` (`appVersion` or `app_version`), `OfrepEvaluationSuccess`,
+  `OfrepEvaluationFailure`, `OfrepEvaluation`, `OfrepBulkResponse`,
+  `OfrepFlagNotFound`, `OfrepInvalidContext`, `OfrepReason`,
+  `OfrepErrorCode` and `OfrepBulkResponseByAudience`. The existing
+  interfaces and types are unchanged.
+- **Conformance:**
+  - `conformance/wire/manifest_check.json` (suite `manifest_check`, scope
+    `wire`, 26 cases). Each case takes a committed and a current manifest
+    plus today's date. It expects `invalid` (naming the manifest to refuse),
+    or ok/stale/breaking with removed wires, type changes and audiences made
+    private. A client's contract check shares these semantics.
+  - `conformance/wire/client_state.json` gains strict-JSON cases: unquoted
+    literals, single quotes, unquoted keys, malformed numbers, trailing
+    commas, raw control characters, invalid escapes, and nesting beyond the
+    new `limits.max_nesting` (100), and lone or reversed surrogate escapes. It
+    also gains a version rule: a
+    `metadata.version` is kept only when it is printable ASCII without a
+    space or `"`.
+
+### Changed
+
+- The committed manifest's format is version 2. Regenerate it after
+  upgrading (`bin/rails standard_flags:manifest`). A tool that read version
+  1's `audiences` (`{ audience => first wire }`) or `wires` now reads
+  `audiences` (`{ audience => [wires] }`). `standard_flags:manifest:check`
+  reads a version 1 file, reports it stale, and still checks its wires.
 
 ## [0.3.0] - 2026-11-25
 

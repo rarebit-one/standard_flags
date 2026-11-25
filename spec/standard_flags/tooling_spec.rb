@@ -89,15 +89,19 @@ RSpec.describe StandardFlags::Tooling do
       manifest = JSON.parse(described_class.new.render)
 
       expect(manifest.values_at("version", "flags").then { |v, flags| [ v, flags.map { |f| f["key"] } ] })
-        .to eq([ 1, %w[ai_assistant demo_pages home_hero new_checkout old_banner strict_gates] ])
+        .to eq([ 2, %w[ai_assistant demo_pages home_hero new_checkout old_banner strict_gates] ])
       expect(manifest["flags"].find { |f| f["key"] == "ai_assistant" }).to eq(
         "key" => "ai_assistant", "kind" => "kill_switch", "type" => "boolean", "values" => [ true, false ],
-        "default" => true, "audiences" => { "mobile" => "chat", "web" => "assistant" }
+        "default" => true, "audiences" => { "mobile" => [ "chat" ], "web" => [ "assistant" ] }, "min_client" => {}
       )
       expect(manifest["flags"].find { |f| f["key"] == "new_checkout" }["default"])
         .to eq("*" => false, "production" => false, "staging" => true)
       expect(manifest["tombstones"]).to eq([ { "key" => "manual_entry", "removed" => "2026-12-01" } ])
       expect(described_class.new.render).to eq(described_class.new.render).and(end_with("}\n"))
+    end
+
+    it "lists the audiences it serves" do
+      expect(described_class.new.to_h["audiences"]).to eq("mobile" => { "public" => false }, "web" => { "public" => false })
     end
 
     it "says whether each entry of kind flag is permanent" do
@@ -107,7 +111,7 @@ RSpec.describe StandardFlags::Tooling do
         .to include("demo_pages" => true, "new_checkout" => false, "ai_assistant" => :absent)
       expect(flags["demo_pages"]).to eq(
         "key" => "demo_pages", "kind" => "flag", "type" => "boolean", "values" => [ true, false ],
-        "default" => { "*" => false, "development" => true }, "audiences" => {}, "permanent" => true
+        "default" => { "*" => false, "development" => true }, "audiences" => {}, "min_client" => {}, "permanent" => true
       )
     end
   end
@@ -137,6 +141,15 @@ RSpec.describe StandardFlags::Tooling do
           web: WebFeatures;
         };
 
+        export type MobileWire = "chat";
+        export type WebWire = "assistant" | "strictGates";
+
+        // Every audience the manifest lists, so it may name audiences FeaturesByAudience doesn't.
+        export type WiresByAudience = {
+          readonly mobile: MobileWire;
+          readonly web: WebWire;
+        };
+
         export type FlagKey = "ai_assistant" | "new_checkout" | "strict_gates";
 
         export type FlagValues = {
@@ -145,12 +158,43 @@ RSpec.describe StandardFlags::Tooling do
           readonly strict_gates: "off" | "sensor" | "on";
         };
 
+        #{StandardFlags::Tooling::TypeScript::OFREP_TYPES}
         #{StandardFlags::Tooling::TypeScript::MCP_TYPES.chomp}
       TS
     end
 
     it "types an empty registry's keys as never" do
       expect(described_class.new(registry: StandardFlags::Registry.empty).render).to include("export type FlagKey = never;")
+    end
+
+    it "types each audience's wires, deprecated static wires included, and the OFREP shapes" do
+      StandardFlags.config.audiences = %i[mobile web kiosk]
+      define_flags do
+        kill_switch :ai_assistant, owner: "x", expose: { mobile: %i[chatEnabled chat] }
+        experiment :home_hero, owner: "x", variants: %w[control savings], expose: { web: :homeHero }
+        tombstone :chat_v1, removed: "2026-12-01", serve: { mobile: { chat_v1: false } }, until: "2027-03-01"
+      end
+      render = described_class.new.render
+
+      expect(render).to include(<<~TS)
+        export type KioskWire = never;
+        export type MobileWire = "chat" | "chatEnabled" | "chat_v1";
+        export type WebWire = "homeHero";
+
+        // Every audience the manifest lists, so it may name audiences FeaturesByAudience doesn't.
+        export type WiresByAudience = {
+          readonly kiosk: KioskWire;
+          readonly mobile: MobileWire;
+          readonly web: WebWire;
+        };
+      TS
+      expect(render).to include(
+        'export type OfrepReason = "STATIC" | "DEFAULT" | "TARGETING_MATCH" | "SPLIT" | "DISABLED" | "ENV_PIN" | "KILL_SWITCH";',
+        'export type OfrepErrorCode = "PARSE_ERROR" | "TARGETING_KEY_MISSING" | "INVALID_CONTEXT" | "GENERAL";',
+        "readonly [A in keyof WiresByAudience]: OfrepBulkResponse<WiresByAudience[A]>;"
+      )
+      # The interfaces apps already import keep their shape.
+      expect(render).to include("export interface MobileFeatures {\n  readonly chat: boolean;\n  readonly chatEnabled: boolean;\n}")
     end
   end
 

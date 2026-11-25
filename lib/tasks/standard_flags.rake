@@ -71,6 +71,53 @@ namespace :standard_flags do
     puts "Wrote #{path.relative_path_from(Rails.root)}"
   end
 
+  namespace :manifest do
+    # Exit 0 when the committed manifest matches the registry; 1 when it is
+    # stale or missing; 2 when a wire the baseline told a client is gone
+    # without a tombstone serving it, changed type, or a public audience
+    # went private, or when a manifest (or a given BASE) can't be read.
+    # Without BASE= the committed file is the baseline, with a warning;
+    # BASE_OPTIONAL=1 lets a BASE file that doesn't exist skip the contract
+    # checks; a directory or an unreadable file still fails.
+    desc "Check the committed manifest against the registry: BASE=<base branch's manifest> [BASE_OPTIONAL=1]"
+    task check: :environment do
+      path = Rails.root.join(StandardFlags.config.manifest_path)
+      committed = File.file?(path) ? File.binread(path).force_encoding(Encoding::UTF_8) : nil
+      base_path = ENV["BASE"].to_s.strip
+      base =
+        if base_path.empty? then :committed
+        elsif File.directory?(base_path) then StandardFlags::Tooling::ManifestCheck::Unavailable.new(reason: "BASE #{base_path} is a directory")
+        elsif !File.exist?(base_path) then StandardFlags::Tooling::ManifestCheck::Unavailable.new(reason: "BASE #{base_path} does not exist", missing: true)
+        else
+          begin
+            File.binread(base_path).force_encoding(Encoding::UTF_8)
+          rescue SystemCallError => e
+            StandardFlags::Tooling::ManifestCheck::Unavailable.new(reason: "BASE #{base_path} can't be read (#{e.class})")
+          end
+        end
+      check = StandardFlags::Tooling::ManifestCheck.new(committed: committed, base: base, base_optional: ENV["BASE_OPTIONAL"] == "1")
+      result = check.call
+      relative = path.relative_path_from(Rails.root).to_s
+      if result.ok?
+        puts check.render(result, path: relative)
+      else
+        warn check.render(result, path: relative)
+        exit result.exit_code
+      end
+    end
+  end
+
+  desc "Write Kotlin enums per audience from the manifest (config.kotlin_path, config.kotlin_package)"
+  task kotlin: :environment do
+    path = Rails.root.join(StandardFlags.config.kotlin_path)
+    FileUtils.mkdir_p(path.dirname)
+    # The existing file's entry names are kept, so shipped client code keeps
+    # compiling against the same constants. Delete it to name everything afresh.
+    previous = File.file?(path) ? File.read(path) : nil
+    File.write(path, StandardFlags::Tooling::Kotlin.new(previous: previous).render)
+    puts "Wrote #{path.relative_path_from(Rails.root)}"
+  end
+
   desc "Write TypeScript Features types per audience (config.typescript_path)"
   task typescript: :environment do
     path = Rails.root.join(StandardFlags.config.typescript_path)

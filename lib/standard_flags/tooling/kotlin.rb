@@ -1,0 +1,319 @@
+require "digest"
+require "set"
+require "active_support/core_ext/string/inflections"
+
+module StandardFlags
+  module Tooling
+    # `standard_flags:kotlin`: plain Kotlin (no dependencies) generated from
+    # the version 2 manifest, written to `config.kotlin_path` in
+    # `config.kotlin_package`:
+    #
+    # * `StandardFlagsManifest`: the manifest version and the SHA-256 of the
+    #   canonical manifest (`Manifest#digest`: what `standard_flags:manifest`
+    #   writes, LF line endings), so a client build can tell it is out of
+    #   date;
+    # * `FeatureType`: BOOLEAN or STRING, a wire's JSON type;
+    # * per audience, `enum class <Audience>Feature(val wire: String, val
+    #   type: FeatureType)`, one entry per wire (aliases and deprecated
+    #   static wires included, the latter `@Deprecated`), ordered by wire
+    #   name, with `fromWire`;
+    # * per string flag exposed to any audience (modes and experiments),
+    #   `enum class <Key>Value(val value: String)` in declared order, with
+    #   `fromValue`.
+    #
+    # Entry names are the wire name or value in SCREAMING_SNAKE_CASE
+    # (`homeHero` → `HOME_HERO`).
+    #
+    # Names are stable across regenerations: given the file written last
+    # time (`previous:`; the rake task passes the existing
+    # `config.kotlin_path`), every wire and value keeps the name it had there,
+    # and only new ones are named. So a `new_checkout` alias added later never
+    # takes `NEW_CHECKOUT` from a shipped `newCheckout`.
+    #
+    # A new name never fails on a clash:
+    #
+    # * Wires of one audience that map to the same name (`new_checkout` and
+    #   `newCheckout`, an alias pair a rename leaves behind): the spelling
+    #   that already is the name in some case (`new_checkout`, else
+    #   `NEW_CHECKOUT`) keeps it, unless an existing wire holds it; every
+    #   other spelling gets `_` and the first 8 hex digits of the SHA-256 of
+    #   its exact spelling (`NEW_CHECKOUT_1F0A2B3C`), and its KDoc says why.
+    # * Values of one flag that map to the same name: the first keeps it, and
+    #   each later one, in declared order, gets the first free `_2`, `_3`, …
+    #
+    # NameClash is left for what can't be resolved: two generated type names
+    # that are equal, or a name that isn't an identifier.
+    class Kotlin
+      # Two generated names would be the same Kotlin identifier, or a name
+      # isn't one.
+      class NameClash < Error; end
+
+      PACKAGE_SEGMENT = /\A[A-Za-z_][A-Za-z0-9_]*\z/
+      # Kotlin's hard keywords, which can't be package segments.
+      HARD_KEYWORDS = %w[as break class continue do else false for fun if in interface is null object package return
+                         super this throw true try typealias typeof val var when while].freeze
+      INDENT = "    ".freeze
+
+      # `previous` is the Kotlin source this generator wrote last time (or
+      # nil); its entry names are kept.
+      def initialize(registry: StandardFlags.registry, package: StandardFlags.config.kotlin_package, manifest: nil, previous: nil)
+        @manifest = manifest || Manifest.new(registry: registry)
+        @package = package&.to_s
+        @previous = self.class.previous_names(previous)
+        validate_package!
+      end
+
+      ENUM_BLOCK = /^enum class ([A-Za-z_][A-Za-z0-9_]*)\((?:val wire: String, val type: FeatureType|val value: String)\) \{\n(.*?)^\}/m
+      ENTRY = /^ {4}([A-Z][A-Z0-9_]*)\(("(?:[^"\\]|\\.)*")/
+
+      # `{ enum name => { wire or value => entry name } }` from a file this
+      # generator wrote. An enum whose entries can't be read back
+      # unambiguously is left out, so its names are made afresh.
+      def self.previous_names(source)
+        return {} unless source.is_a?(String)
+
+        source.scan(ENUM_BLOCK).to_h do |enum, body|
+          pairs = body.scan(ENTRY).map { |name, literal| [ unstring(literal), name ] }
+          valid = pairs.none? { |text, _| text.nil? } && pairs.map(&:first).uniq.size == pairs.size &&
+                  pairs.map(&:last).uniq.size == pairs.size
+          [ enum, valid ? pairs.to_h : {} ]
+        end
+      end
+
+      # The text of a `"..."` literal this generator wrote (`.string`), or
+      # nil.
+      def self.unstring(literal)
+        units = []
+        body = literal[1...-1]
+        index = 0
+        while index < body.length
+          char = body[index]
+          if char != "\\"
+            units.concat(char.encode("UTF-16BE").unpack("n*"))
+            index += 1
+          elsif body[index + 1] == "u" && body[index + 2, 4].to_s.match?(/\A\h{4}\z/)
+            units << body[index + 2, 4].hex
+            index += 6
+          elsif %w[\\ " $].include?(body[index + 1])
+            units << body[index + 1].ord
+            index += 2
+          else
+            return nil
+          end
+        end
+        units.pack("n*").force_encoding(Encoding::UTF_16BE).encode(Encoding::UTF_8)
+      rescue EncodingError
+        nil
+      end
+
+      def render
+        data = @manifest.to_h
+        out = [ "// Generated by `bin/rails standard_flags:kotlin`. Do not edit by hand.",
+                "// Manifest version #{data.fetch('version')}, sha256 #{@manifest.digest}.", "" ]
+        out << "package #{@package}" << "" if @package
+        out.concat(manifest_object(data))
+        out.concat(feature_type)
+        names = {}
+        audience_names(data).each do |audience|
+          out.concat(audience_enum(audience, wires_for(data, audience), names))
+        end
+        value_flags(data).each { |flag| out.concat(value_enum(flag, names)) }
+        "#{out.join("\n").rstrip}\n"
+      end
+
+      # `"..."` with every character outside printable ASCII escaped, so the
+      # source is ASCII whatever the values hold.
+      def self.string(text)
+        body = text.to_s.each_char.map do |char|
+          case char
+          when "\\" then "\\\\"
+          when "\"" then "\\\""
+          when "$" then "\\$"
+          when /[ -~]/ then char
+          else char.encode("UTF-16BE").unpack("n*").map { |unit| format("\\u%04X", unit) }.join
+          end
+        end.join
+        "\"#{body}\""
+      end
+
+      # Entry names for one audience's wires, `{ wire => name }` (see the
+      # class comment). Wires in `previous` (`{ wire => name }`) keep their
+      # names. Raises NameClash only if a suffixed name is itself taken.
+      def self.wire_constants(wires, previous = {})
+        names = {}
+        used = Set.new
+        wires.each do |wire|
+          name = previous[wire]
+          next if name.nil? || used.include?(name)
+
+          names[wire] = name
+          used << name
+        end
+        fresh = wires.reject { |wire| names.key?(wire) }
+        fresh.group_by { |wire| constant(wire) }.each do |base, spellings|
+          plain = spellings.size == 1 ? spellings.first : plain_spelling(base, spellings)
+          spellings.sort.each do |wire|
+            name = wire == plain && !used.include?(base) ? base : "#{base}_#{spelling_hash(wire)}"
+            raise NameClash, "wire #{wire.inspect} would be #{name} in Kotlin, which another wire already is; rename one" if used.include?(name)
+
+            names[wire] = name
+            used << name
+          end
+        end
+        names
+      end
+
+      # Of several spellings that map to `base`, the one that already is
+      # `base` in lower or upper case (`new_checkout`, else `NEW_CHECKOUT`).
+      def self.plain_spelling(base, spellings)
+        spellings.find { |wire| wire == base.downcase } || spellings.find { |wire| wire == base }
+      end
+
+      def self.spelling_hash(wire)
+        Digest::SHA256.hexdigest(wire)[0, 8].upcase
+      end
+
+      # Entry names for one flag's values, in declared order: values in
+      # `previous` (`{ value => name }`) keep their names; a clash gets the
+      # first free `_2`, `_3`, …
+      def self.value_constants(values, previous = {})
+        used = Set.new
+        kept = values.to_h do |value|
+          name = previous[value]
+          name = nil if name.nil? || used.include?(name)
+          used << name if name
+          [ value, name ]
+        end
+        values.map do |value|
+          next kept[value] if kept[value]
+
+          base = constant(value)
+          name = base
+          suffix = 1
+          name = "#{base}_#{suffix += 1}" while used.include?(name)
+          used << name
+          name
+        end
+      end
+
+      # SCREAMING_SNAKE_CASE for a wire name or value; "V_" in front of one
+      # that would start with a digit or be empty.
+      def self.constant(text)
+        name = text.to_s.gsub(/[^A-Za-z0-9]+/, "_").underscore.upcase.gsub(/_+/, "_").delete_prefix("_").delete_suffix("_")
+        name.empty? || name.match?(/\A[0-9]/) ? "V_#{name}".delete_suffix("_") : name
+      end
+
+      private
+
+      def validate_package!
+        return if @package.nil?
+
+        segments = @package.split(".", -1)
+        valid = !segments.empty? && segments.all? { |segment| segment.match?(PACKAGE_SEGMENT) && !HARD_KEYWORDS.include?(segment) }
+        raise ConfigurationError, "config.kotlin_package #{@package.inspect} is not a Kotlin package name" unless valid
+      end
+
+      def manifest_object(data)
+        [ "/** The manifest this file was generated from. */",
+          "object StandardFlagsManifest {",
+          "#{INDENT}const val VERSION: Int = #{Integer(data.fetch('version'))}",
+          "#{INDENT}const val SHA256: String = #{self.class.string(@manifest.digest)}",
+          "}", "" ]
+      end
+
+      def feature_type
+        [ "/** A wire's JSON type. */",
+          "enum class FeatureType { BOOLEAN, STRING }", "" ]
+      end
+
+      def audience_names(data)
+        data.fetch("audiences").keys.sort
+      end
+
+      # `[[wire, type, flag entry or nil, tombstone entry or nil], ...]`
+      # ordered by wire name.
+      def wires_for(data, audience)
+        wires = data.fetch("flags").flat_map do |flag|
+          flag.fetch("audiences").fetch(audience, []).map { |wire| [ wire, flag.fetch("type"), flag, nil ] }
+        end
+        data.fetch("tombstones").each do |tombstone|
+          tombstone.fetch("serve", {}).fetch(audience, {}).each do |wire, value|
+            wires << [ wire, [ true, false ].include?(value) ? "boolean" : "string", nil, tombstone ]
+          end
+        end
+        wires.sort_by(&:first)
+      end
+
+      def audience_enum(audience, wires, names)
+        name = claim(names, "#{audience.camelize}Feature", "audience #{audience}")
+        constants = self.class.wire_constants(wires.map(&:first), @previous.fetch(name, {}))
+        out = [ "/** The wires the #{audience} audience is told, ordered by wire name. */",
+                "enum class #{name}(val wire: String, val type: FeatureType) {" ]
+        wires.each do |wire, type, flag, tombstone|
+          constant = constants.fetch(wire)
+          notes = []
+          note = rename_note(wire, constant, constants)
+          notes << note if note
+          notes << "Values: [#{value_enum_name(flag)}]." if flag && type == "string" && value_flag?(flag)
+          out << "#{INDENT}/** #{notes.join(' ')} */" unless notes.empty?
+          if tombstone
+            out << "#{INDENT}@Deprecated(#{self.class.string("No longer declared; served as a static value through #{tombstone.fetch('until')}")})"
+          end
+          out << "#{INDENT}#{constant}(#{self.class.string(wire)}, FeatureType.#{type.upcase}),"
+        end
+        out << "#{INDENT};" << "" << "#{INDENT}companion object {"
+        out << "#{INDENT * 2}fun fromWire(wire: String): #{name}? = values().firstOrNull { it.wire == wire }"
+        out << "#{INDENT}}" << "}" << ""
+      end
+
+      # Why a wire's entry isn't its plain name, or nil when it is.
+      def rename_note(wire, constant, constants)
+        base = self.class.constant(wire)
+        return nil if constant == base
+
+        holder = constants.key(base)
+        others = constants.keys.select { |other| other != wire && self.class.constant(other) == base }
+        if holder then "Wire #{wire} (#{base} is the wire #{holder})."
+        elsif !others.empty? then "Wire #{wire} (it shares #{base} with #{others.join(', ')}, so each carries a suffix)."
+        else "Wire #{wire} (named when another wire held #{base}; kept so client code keeps compiling)."
+        end
+      end
+
+      def value_flags(data)
+        data.fetch("flags").select { |flag| value_flag?(flag) }.sort_by { |flag| flag.fetch("key") }
+      end
+
+      def value_flag?(flag)
+        flag.fetch("type") == "string" && flag.fetch("audiences").any? { |_, wires| !wires.empty? }
+      end
+
+      def value_enum_name(flag)
+        "#{flag.fetch('key').camelize}Value"
+      end
+
+      def value_enum(flag, names)
+        name = claim(names, value_enum_name(flag), "flag #{flag.fetch('key')}")
+        values = flag.fetch("values").map(&:to_s)
+        constants = self.class.value_constants(values, @previous.fetch(name, {}))
+        wires = flag.fetch("audiences").sort.map { |audience, list| "#{audience}: #{list.join(', ')}" }.join("; ")
+        out = [ "/** Values of #{wires}. */", "enum class #{name}(val value: String) {" ]
+        values.zip(constants).each { |value, constant| out << "#{INDENT}#{constant}(#{self.class.string(value)})," }
+        out << "#{INDENT};" << "" << "#{INDENT}companion object {"
+        out << "#{INDENT * 2}fun fromValue(value: String?): #{name}? = values().firstOrNull { it.value == value }"
+        out << "#{INDENT}}" << "}" << ""
+      end
+
+      def claim(names, name, owner)
+        raise NameClash, "#{owner} generates #{name.inspect}, which is not a Kotlin identifier" unless name.match?(PACKAGE_SEGMENT)
+
+        reserved = %w[StandardFlagsManifest FeatureType]
+        if reserved.include?(name) || names.key?(name)
+          raise NameClash, "#{owner} and #{names.fetch(name, 'a generated type')} both generate Kotlin type #{name}"
+        end
+
+        names[name] = owner
+        name
+      end
+    end
+  end
+end
