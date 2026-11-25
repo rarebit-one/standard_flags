@@ -245,7 +245,8 @@ class BootstrapController < DummyBaseController
 end
 
 # GET /client/status: pre-auth, on the CSRF-protected base (a GET, so
-# forgery protection never applies) and on an API controller.
+# forgery protection never applies) and on one API controller, which proves
+# the mixin needs nothing from ActionController::Base.
 class ClientStatusController < DummyBaseController
   include StandardFlags::ClientStatus::Controller
 
@@ -264,7 +265,7 @@ class ClientStatusApiController < ActionController::API
   before_action { response.headers["Vary"] = "Accept-Encoding" }
 end
 
-class KioskClientStatusController < ActionController::API
+class KioskClientStatusController < DummyBaseController
   include StandardFlags::ClientStatus::Controller
 
   standard_flags_client_status group: :kiosk, max_age: 5
@@ -305,9 +306,7 @@ class UpgradeResponderController < DummyBaseController
   end
 end
 
-class UpgradeKioskController < ActionController::API
-  include StandardFlags::Controller
-
+class UpgradeKioskController < DummyBaseController
   requires_client_version group: :kiosk
 
   def index
