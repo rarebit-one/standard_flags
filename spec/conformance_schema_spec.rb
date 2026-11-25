@@ -10,7 +10,8 @@ RSpec.describe "conformance fixture schema" do
   it "covers every fixture file" do
     expect(files.map { |file| file.delete_prefix("#{ConformanceRegistry::ROOT}/") }).to include(
       "resolution.json", "runtime/rules.json", "operations/write_path.json", "bucket_vectors.json",
-      "versions/version_ranges.json", "versions/legacy_ranges.json", "wire/delivery.json", "wire/client_state.json"
+      "versions/version_ranges.json", "versions/legacy_ranges.json", "wire/delivery.json", "wire/client_state.json",
+      "wire/client_status.json"
     )
   end
 
@@ -30,6 +31,6 @@ RSpec.describe "conformance fixture schema" do
 
   it "keeps server-only behaviour out of the wire scope" do
     scopes = files.to_h { |file| [ File.basename(file), ConformanceRegistry.load(file).fetch("scope") ] }
-    expect(scopes.select { |_, scope| scope == "wire" }.keys.sort).to eq(%w[client_state.json delivery.json version_ranges.json])
+    expect(scopes.select { |_, scope| scope == "wire" }.keys.sort).to eq(%w[client_state.json client_status.json delivery.json version_ranges.json])
   end
 end

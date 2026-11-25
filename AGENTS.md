@@ -42,6 +42,10 @@ lib/standard_flags/
 ├── registry.rb                     # Immutable registry + Builder DSL + cross-flag validation
 ├── context.rb                      # Actors per unit, env override, client attributes
 ├── client.rb                       # Calling client (platform, version, build); X-Client-* header parsing
+├── client_app.rb                   # Client registry entry (`client` in config/flags.rb), ENV pins, grace
+├── client_status.rb + client_status/controller.rb
+│                                   # Upgrade status (ok/recommended/required/unknown); GET /client/status mixin
+├── stores.rb + stores/app_store.rb # Store ceiling lookups; the App Store adapter (autoloaded)
 ├── semantic_version.rb             # StandardFlags::Version: SemVer 2.0 + shorthands, precedence
 ├── version_range.rb                # VersionRange / BuildRange: portable comparator syntax; RubyGems ranges read
 ├── parser.rb                       # The one strict ENV parser
@@ -57,9 +61,9 @@ lib/standard_flags/
 ├── memo.rb                         # Per-unit-of-work memo (executor hook)
 ├── reporting.rb                    # Rails.error + notifications, once per process
 ├── testing.rb / rspec.rb           # Test overrides; RSpec helpers for hosts
-├── controller.rb / job.rb          # requires_flag guards (autoloaded)
+├── controller.rb / job.rb          # requires_flag and requires_client_version guards (autoloaded)
 ├── diagnostics.rb / health_check.rb# Diagnostics hash; opt-in standard_health check
-├── runtime.rb + runtime/            # Runtime rules: stores, cache, resolver, evaluation tracker
+├── runtime.rb + runtime/            # Runtime rules: stores, cache, resolver, evaluation and compat trackers
 ├── operations.rb + operations/     # The write path: audited operations, validation, audit, restore
 ├── mcp.rb + mcp/                   # Operator tools (list/get/write flags, members, cohorts); no MCP framework;
 │                                   #   mcp/gating.rb gates an app's own tools on flags

@@ -1,0 +1,16 @@
+# Compat window counts for StandardFlags (config.track_compat): one row per
+# compat flag and client platform, written behind by each process. Additive:
+# apps that already ran create_standard_flags_tables get only this table.
+class CreateStandardFlagsCompatStats < ActiveRecord::Migration<%= migration_version %>
+  def change
+    create_table :standard_flags_compat_stats<%= table_options %> do |t|
+      t.string :key, null: false
+      t.string :platform, null: false
+      t.bigint :hits, null: false, default: 0
+      t.string :oldest_version
+      t.datetime :last_hit_at
+
+      t.index %i[key platform], unique: true
+    end
+  end
+end

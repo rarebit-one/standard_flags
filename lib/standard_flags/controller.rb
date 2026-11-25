@@ -38,6 +38,11 @@ module StandardFlags
   # subclass) takes it over. One raised with `status: 404` answers like
   # `error: :not_found`, with no meta.
   #
+  # `requires_client_version` answers 426 `client_upgrade_required` to a
+  # build below its enforced minimum (see StandardFlags::ClientStatus),
+  # through the same responders; a raised StandardFlags::ClientUpgradeRequired
+  # is answered the same way, and as robustly.
+  #
   # Flags are evaluated for `standard_flags_context` plus the calling client,
   # read once per request from the X-Client-Platform, X-Client-Version and
   # X-Client-Build headers (`standard_flags_client`). A context that already
@@ -56,6 +61,18 @@ module StandardFlags
         error_object = { status: status.to_s, code: error.to_s }
         error_object[:meta] = { feature: feature } if error == :feature_disabled
         { errors: [ error_object ] }
+      end
+    end
+
+    # What `requires_client_version` (or a raised ClientUpgradeRequired)
+    # hands the responder: `error` is :client_upgrade_required and `status`
+    # 426. `key` is the declared client's name (nil when the request's
+    # version is unknown and `config.require_client_version` refused it),
+    # and `feature` is always nil, so a responder written for Denial can
+    # tell them apart by `error`.
+    UpgradeDenial = Data.define(:key, :error, :status, :feature, :platform, :version, :min_version, :store_url) do
+      def body
+        { errors: [ { status: status.to_s, code: error.to_s, meta: { min_version: min_version, store_url: store_url } } ] }
       end
     end
 
@@ -80,6 +97,24 @@ module StandardFlags
         status ||= ERRORS.fetch(error)
         before_action(**{ only: only, except: except }.compact) do
           standard_flags_require!(key, error: error, status: status, responder: with)
+        end
+      end
+
+      # Answers 426 `client_upgrade_required` when the request's client is
+      # below its enforced minimum (StandardFlags::ClientStatus says
+      # `upgrade_required`), through `with:`, `config.controller_responder`
+      # or the default JSON:API body, whose meta carries `min_version` and
+      # `store_url`. A client in its grace window, or below `recommended`
+      # only, passes. So does one whose platform or version is unknown,
+      # unless `config.require_client_version` is true. `group:` picks the
+      # client group (see StandardFlags::ClientApp).
+      def requires_client_version(only: nil, except: nil, group: nil, with: nil)
+        unless with.nil? || with.is_a?(Symbol) || with.respond_to?(:call)
+          raise ArgumentError, "with: must respond to call(controller, denial) or be a Symbol naming a controller method"
+        end
+
+        before_action(**{ only: only, except: except }.compact) do
+          standard_flags_require_client!(group: group&.to_sym, responder: with)
         end
       end
     end
@@ -139,14 +174,19 @@ module StandardFlags
     end
     public :rescue_with_handler, :handler_for_rescue
 
+    STANDARD_FLAGS_HANDLERS = { FeatureDisabled => :standard_flags_feature_disabled,
+                                ClientUpgradeRequired => :standard_flags_client_upgrade_required }.freeze
+    private_constant :STANDARD_FLAGS_HANDLERS
+
     def standard_flags_handler(exception)
-      return unless exception.is_a?(FeatureDisabled)
+      base, handler_name = STANDARD_FLAGS_HANDLERS.find { |klass, _| exception.is_a?(klass) }
+      return unless base
 
       targeted = self.class.rescue_handlers.any? do |name, handler|
-        klass = name.safe_constantize if handler != :standard_flags_feature_disabled
-        klass.is_a?(Class) && klass <= FeatureDisabled
+        klass = name.safe_constantize unless STANDARD_FLAGS_HANDLERS.value?(handler)
+        klass.is_a?(Class) && klass <= base
       end
-      method(:standard_flags_feature_disabled) unless targeted
+      method(handler_name) unless targeted
     end
 
     def standard_flags_require!(key, error:, status:, responder: nil)
@@ -154,6 +194,27 @@ module StandardFlags
 
       standard_flags_deny(Denial.new(key: key.to_sym, error: error, status: status, feature: standard_flags_feature_name(key)),
                           responder)
+    end
+
+    # The 426 guard. A Hash context client counts, as for flags.
+    def standard_flags_require_client!(group:, responder: nil)
+      result = ClientStatus.for(standard_flags_request_context.client, group: group)
+      return unless result.upgrade_required? || (result.unknown? && StandardFlags.config.require_client_version)
+
+      standard_flags_deny(standard_flags_upgrade_denial(result.client_app&.name, result.platform, result.version,
+                                                        result.min_version, result.store_url), responder)
+    end
+
+    def standard_flags_client_upgrade_required(exception)
+      return if performed?
+
+      standard_flags_deny(standard_flags_upgrade_denial(exception.client, exception.platform, exception.version,
+                                                        exception.min_version, exception.store_url), nil)
+    end
+
+    def standard_flags_upgrade_denial(client, platform, version, min_version, store_url)
+      UpgradeDenial.new(key: client, error: :client_upgrade_required, status: 426, feature: nil, platform: platform,
+                        version: version&.to_s, min_version: min_version&.to_s, store_url: store_url)
     end
 
     # A 404 answers like `error: :not_found`, revealing no feature name.

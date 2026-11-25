@@ -12,7 +12,9 @@ module StandardFlags
 
     def report(registry: StandardFlags.registry, env: StandardFlags.config.env_source, today: Date.today)
       environment = safe_env(registry)
-      rows = registry.definitions.map { |definition| row(registry, definition, env, environment, today) }
+      rows = Runtime::CompatTracker.untracked do
+        registry.definitions.map { |definition| row(registry, definition, env, environment, today) }
+      end
 
       report = {
         environment: environment,
@@ -25,7 +27,48 @@ module StandardFlags
         unknown_env_vars: unknown_env_vars(registry, env)
       }
       report[:runtime] = Runtime.status(registry: registry) if Runtime.enabled?
+      report[:clients] = clients(registry, env) unless registry.clients.empty?
+      report[:compat] = compat(registry) if registry.definitions.any?(&:compat_window?)
       report.merge(status: status(report))
+    end
+
+    # The client registry with its ENV pins applied: the values in force
+    # (versions as Strings, dates as YYYY-MM-DD), the pins that applied and
+    # those ignored. `available` is the declared or pinned one; a store
+    # lookup isn't asked here, so a health check never waits on a store.
+    def clients(registry, env)
+      registry.clients.values.sort_by(&:name).map do |app|
+        policy = app.resolve(env)
+        { name: app.name, platform: app.platform, group: app.group, min_version: policy.min_version&.to_s,
+          since: policy.since&.iso8601, enforce_on: policy.enforce_on&.iso8601, grace_days: app.grace_days,
+          recommended: policy.recommended&.to_s, available: policy.available&.to_s, store_url: app.store_url,
+          store_lookup: store_lookup?(app), pinned: policy.pinned, rejected: policy.rejected }
+      end
+    end
+
+    # Compat flags with `until_clients:`, and their stored counts when
+    # `config.track_compat` is on (`stats` is nil when off, or when the
+    # store keeps none; `error` names the error class when it can't be read).
+    def compat(registry)
+      windows = registry.definitions.select(&:compat_window?).sort_by(&:key)
+      tracking = StandardFlags.config.track_compat == true && Runtime.enabled?
+      stats, error = compat_stats(windows) if tracking
+      grouped = (stats || []).group_by { |stat| stat.key.to_s }
+      { tracking: tracking, error: error, flags: windows.map do |definition|
+        { flag: definition.key, until_clients: definition.until_clients.transform_values(&:to_s),
+          stats: stats && grouped.fetch(definition.key.to_s, []).map(&:to_h) }
+      end }
+    end
+
+    def compat_stats(windows)
+      [ Runtime.compat_stats(windows.map(&:key)), nil ]
+    rescue StandardError => e
+      [ nil, (e.cause_class if e.is_a?(Runtime::StoreError)) || e.class.name ]
+    end
+
+    def store_lookup?(app)
+      lookup = StandardFlags.config.client_store_lookup
+      lookup.is_a?(Hash) ? lookup.key?(app.name) || lookup.key?(app.name.to_s) : !lookup.nil? && app.platform == "ios"
     end
 
     # One line per warning, names only.
@@ -34,7 +77,22 @@ module StandardFlags
         report[:legacy_env_vars].map { |p| "#{p[:env_var]} for :#{p[:flag]} is deprecated; rename to #{p[:canonical]}" } +
         report[:stale].map { |s| ":#{s[:flag]} is past remove_by #{s[:remove_by]}" } +
         report[:unknown_env_vars].map { |var| "#{var} does not match a declared flag" } +
-        runtime_warnings(report[:runtime])
+        runtime_warnings(report[:runtime]) + client_warnings(report[:clients]) + compat_warnings(report[:compat])
+    end
+
+    def client_warnings(clients)
+      Array(clients).flat_map do |client|
+        client[:pinned].map { |var| "#{var} pins client :#{client[:name]} (break-glass; the code's value is overridden)" } +
+          client[:rejected].map { |var| "#{var} for client :#{client[:name]} is not a valid value (ignored)" }
+      end
+    end
+
+    def compat_warnings(compat)
+      return [] if compat.nil?
+      return [ "compat stats could not be read (#{compat[:error]})" ] if compat[:error]
+      return [] unless StandardFlags.config.track_compat == true && !compat[:tracking]
+
+      [ "config.track_compat is on but runtime rules are off, so compat hits are not counted" ]
     end
 
     # Runtime rules are on but the store says their tables are missing. A
@@ -113,7 +171,8 @@ module StandardFlags
     def unknown_env_vars(registry, env)
       return [] unless env.respond_to?(:keys)
 
-      declared = registry.keys.map { |key| "#{CANONICAL_PREFIX}#{key.to_s.upcase}" }
+      declared = registry.keys.map { |key| "#{CANONICAL_PREFIX}#{key.to_s.upcase}" } +
+                 registry.clients.each_value.flat_map(&:env_vars)
       env.keys.select { |name| name.to_s.start_with?(CANONICAL_PREFIX) }.map(&:to_s).reject { |n| declared.include?(n) }.sort
     end
 

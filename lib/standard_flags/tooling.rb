@@ -72,6 +72,14 @@ module StandardFlags
     # `config.track_evaluations` is on), and rules for undeclared or
     # tombstoned keys; and memberships past `config.membership_retention`
     # that `flags:purge` would delete.
+    #
+    # With `config.track_compat` on, it lists compat flags whose window has
+    # passed on every platform `until_clients:` names and that have had no
+    # hits for 14 days. A platform's window has passed when every client
+    # declared for it enforces a minimum at or above the listed version
+    # today, or when no client below that version has used the flag (no
+    # hits from the platform at all, or its oldest version seen is at or
+    # above it).
     class Stale
       SETTLED_AFTER = 30 * 86_400
       UNUSED_AFTER = 14 * 86_400
@@ -105,6 +113,7 @@ module StandardFlags
             end
           end
         lines.concat(serve_lines)
+        lines.concat(compat_lines)
         lines.concat(runtime_lines) if Runtime.enabled?
         lines.join("\n")
       end
@@ -132,6 +141,50 @@ module StandardFlags
           "tombstone #{tombstone.key} stopped serving #{wires.sort.join(', ')} after #{tombstone.serve_until.iso8601}; " \
             "its serve: block can be removed"
         end
+      end
+
+      def compat_lines
+        windows = @registry.definitions.select(&:compat_window?).sort_by(&:key)
+        return [] if windows.empty? || !StandardFlags.config.track_compat || !Runtime.enabled?
+
+        stats = store.compat_stats(windows.map { |definition| definition.key.to_s })
+        return [ "compat windows: the runtime store doesn't keep compat stats" ] if stats.nil?
+
+        by_key = stats.group_by { |stat| stat.key.to_s }
+        windows.filter_map { |definition| compat_finding(definition, by_key.fetch(definition.key.to_s, [])) }
+      rescue StandardError => e
+        [ "compat windows: could not read the stats (#{(e.cause_class if e.is_a?(Runtime::StoreError)) || e.class})" ]
+      end
+
+      def compat_finding(definition, stats)
+        last = stats.filter_map(&:last_hit_at).max
+        return if last && last > @now - UNUSED_AFTER
+        return unless definition.until_clients.all? { |platform, cutoff| window_passed?(platform, cutoff, stats) }
+
+        windows = definition.until_clients.map { |platform, cutoff| "#{platform} #{cutoff}" }.join(", ")
+        seen = last ? "no hits since #{day(last)}" : "no hits recorded"
+        "compat #{definition.key} (owner: #{definition.owner}) is past its window on every platform (#{windows}) " \
+          "and has had #{seen}; it can be removed"
+      end
+
+      def window_passed?(platform, cutoff, stats)
+        apps = @registry.clients.each_value.select { |app| app.platform == platform }
+        return true if !apps.empty? && apps.all? { |app| enforced_at_least?(app, cutoff) }
+
+        stat = stats.find { |entry| entry.platform == platform }
+        return true if stat.nil?
+
+        oldest = Version.parse(stat.oldest_version)
+        !oldest.nil? && oldest >= cutoff
+      end
+
+      def enforced_at_least?(app, cutoff)
+        policy = app.resolve
+        return false if policy.min_version.nil? || @today < policy.enforce_on
+
+        ceiling = policy.ceiling
+        minimum = ceiling ? [ policy.min_version, ceiling ].min : policy.min_version
+        minimum >= cutoff
       end
 
       def runtime_lines

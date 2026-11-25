@@ -4,7 +4,8 @@ require "stringio"
 # Specs tagged :db run against Postgres and only when DATABASE_URL is set,
 # so the default matrix never needs a database (or loads ActiveRecord).
 module DatabaseHelpers
-  TABLES = %w[standard_flags_memberships standard_flags_cohorts standard_flags_rules standard_flags_state].freeze
+  TABLES = %w[standard_flags_memberships standard_flags_cohorts standard_flags_rules standard_flags_state
+              standard_flags_compat_stats].freeze
 
   module_function
 
@@ -65,7 +66,9 @@ module DatabaseHelpers
     FileUtils.rm_rf(destination)
     capture_stdout { StandardFlags::Generators::MigrationsGenerator.start([], destination_root: destination) }
     load Dir[File.join(destination, "db/migrate/*_create_standard_flags_tables.rb")].first
-    CreateStandardFlagsTables.migrate(direction)
+    load Dir[File.join(destination, "db/migrate/*_create_standard_flags_compat_stats.rb")].first
+    migrations = [ CreateStandardFlagsTables, CreateStandardFlagsCompatStats ]
+    (direction == :down ? migrations.reverse : migrations).each { |migration| migration.migrate(direction) }
   end
 
   def capture_stdout

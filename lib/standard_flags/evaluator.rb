@@ -15,6 +15,7 @@ module StandardFlags
       return unknown(registry, key) unless definition
 
       evaluation = Memo.fetch(memo_key(registry, definition, context)) { resolve(registry, definition, context) }
+      Runtime.track_compat(definition, context) if definition.compat_window?
       sample(evaluation)
       evaluation
     end

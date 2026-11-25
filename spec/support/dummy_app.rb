@@ -47,6 +47,18 @@ Dummy::Application.routes.draw do
   post "/rescuing/ofrep/v1/evaluate/flags" => "ofrep_rescuing#ofrep_evaluate_flags"
   post "/pre-auth/ofrep/v1/evaluate/flags/:key" => "ofrep_pre_auth#ofrep_evaluate_flag"
   get "/bootstrap" => "bootstrap#show"
+  get "/client/status" => "client_status#client_status"
+  get "/api/client/status" => "client_status_api#client_status"
+  get "/kiosk/client/status" => "kiosk_client_status#client_status"
+  get "/upgrade/orders" => "upgrade#orders"
+  get "/upgrade/health" => "upgrade#health"
+  get "/upgrade/own" => "upgrade_own#index"
+  get "/upgrade/responder" => "upgrade_responder#index"
+  get "/upgrade/raise" => "upgrade_raise#raise_required"
+  get "/upgrade/rescuing" => "upgrade_rescuing#raise_required"
+  get "/upgrade/targeted" => "upgrade_targeted#raise_required"
+  get "/upgrade/kiosk" => "upgrade_kiosk#index"
+  get "/upgrade/context" => "upgrade_context#index"
 end
 
 require_relative "dummy_controllers"

@@ -243,3 +243,120 @@ class BootstrapController < DummyBaseController
     render json: { profile: {}, features: standard_flags_payload(:mobile, format: :ofrep) }
   end
 end
+
+# GET /client/status: pre-auth, on the CSRF-protected base (a GET, so
+# forgery protection never applies) and on an API controller.
+class ClientStatusController < DummyBaseController
+  include StandardFlags::ClientStatus::Controller
+
+  standard_flags_client_status
+
+  private
+
+  def standard_flags_context
+    raise "the client status endpoint must not ask who is signed in"
+  end
+end
+
+class ClientStatusApiController < ActionController::API
+  include StandardFlags::ClientStatus::Controller
+
+  before_action { response.headers["Vary"] = "Accept-Encoding" }
+end
+
+class KioskClientStatusController < ActionController::API
+  include StandardFlags::ClientStatus::Controller
+
+  standard_flags_client_status group: :kiosk, max_age: 5
+end
+
+# requires_client_version: the 426 guard.
+class UpgradeController < DummyBaseController
+  requires_client_version except: :health
+
+  def orders
+    render plain: "orders"
+  end
+
+  def health
+    render plain: "health"
+  end
+end
+
+class UpgradeOwnController < DummyBaseController
+  requires_client_version with: :render_upgrade
+
+  def index
+    render plain: "own"
+  end
+
+  private
+
+  def render_upgrade(denial)
+    render json: { error: { code: denial.error.to_s.upcase, min: denial.min_version, client: denial.key } }, status: denial.status
+  end
+end
+
+class UpgradeResponderController < DummyBaseController
+  requires_client_version
+
+  def index
+    render plain: "responder"
+  end
+end
+
+class UpgradeKioskController < ActionController::API
+  include StandardFlags::Controller
+
+  requires_client_version group: :kiosk
+
+  def index
+    render plain: "kiosk"
+  end
+end
+
+# The app's context names a client, which wins over the headers.
+class UpgradeContextController < DummyBaseController
+  requires_client_version
+
+  def index
+    render plain: "context"
+  end
+
+  private
+
+  def standard_flags_context
+    StandardFlags::Context.new(client: { platform: "android", version: "0.1.0" })
+  end
+end
+
+class UpgradeRaiseController < DummyBaseController
+  def raise_required
+    status = StandardFlags::ClientStatus.for(standard_flags_client)
+    raise StandardFlags::ClientUpgradeRequired.new(status) if status.upgrade_required?
+
+    render plain: status.status
+  end
+end
+
+# An app handler for StandardError declared after the include.
+class UpgradeRescuingController < UpgradeRaiseController
+  rescue_from StandardError, with: :render_500
+
+  private
+
+  def render_500(_error)
+    render plain: "app 500", status: 500
+  end
+end
+
+# An app that takes ClientUpgradeRequired over with its own handler.
+class UpgradeTargetedController < UpgradeRaiseController
+  rescue_from StandardFlags::ClientUpgradeRequired, with: :render_own
+
+  private
+
+  def render_own(error)
+    render plain: "own #{error.min_version}", status: 400
+  end
+end

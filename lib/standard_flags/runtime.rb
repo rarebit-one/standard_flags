@@ -3,6 +3,7 @@ require "standard_flags/runtime/rule_snapshot"
 require "standard_flags/runtime/store"
 require "standard_flags/runtime/memory_store"
 require "standard_flags/runtime/evaluation_tracker"
+require "standard_flags/runtime/compat_tracker"
 require "standard_flags/runtime/cache"
 require "standard_flags/runtime/resolver"
 
@@ -86,11 +87,37 @@ module StandardFlags
         @tracker ||= EvaluationTracker.new
       end
 
+      # Compat window hit counts for this process.
+      def compat_tracker
+        @compat_tracker ||= CompatTracker.new
+      end
+
+      # Counts one evaluation of a compat flag with `until_clients:`, when
+      # `config.track_compat` and runtime rules are on and the read isn't an
+      # operator's. Called by the Evaluator; never raises.
+      def track_compat(definition, context)
+        return unless StandardFlags.config.track_compat && enabled? && !CompatTracker.untracked?
+
+        compat_tracker.hit(definition, context.client)
+      rescue StandardError
+        nil
+      end
+
+      # The stored compat stats for `keys` (all when nil), or nil when the
+      # store doesn't keep them. Raises when the store can't be read.
+      def compat_stats(keys = nil)
+        store.compat_stats(keys&.map(&:to_s))
+      end
+
       # Called by Memo::Hook when a unit of work ends, after its evaluations:
-      # flushes the EvaluationTracker if it is due (at most once per
-      # `config.evaluation_tracking_interval` per process). Never raises.
+      # flushes the EvaluationTracker and the CompatTracker if they are due
+      # (at most once per `config.evaluation_tracking_interval` per process).
+      # Never raises.
       def unit_of_work_complete!
-        @tracker&.flush(store, now) if enabled?
+        return unless enabled?
+
+        @tracker&.flush(store, now)
+        @compat_tracker&.flush(store, now)
       rescue StandardError
         nil
       end
@@ -194,6 +221,7 @@ module StandardFlags
         @cache = nil
         @clock = nil
         @tracker = nil
+        @compat_tracker = nil
       end
 
       # The stored string for a Ruby value: true/false become "on"/"off".

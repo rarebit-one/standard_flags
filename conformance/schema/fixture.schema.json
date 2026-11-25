@@ -23,7 +23,8 @@
         "version_ranges",
         "legacy_ranges",
         "delivery",
-        "client_state"
+        "client_state",
+        "client_status"
       ]
     },
     "scope": {
@@ -125,6 +126,18 @@
       },
       "then": {
         "$ref": "#/$defs/client_state_suite"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "suite": {
+            "const": "client_status"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/client_status_suite"
       }
     }
   ],
@@ -1329,6 +1342,174 @@
               },
               "matched": {
                 "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "client_status_payload": {
+      "description": "The GET /client/status body. Every key is always present; absent values are null. Versions are canonical SemVer (MAJOR.MINOR.PATCH[-prerelease]); enforce_at is a UTC date.",
+      "type": "object",
+      "required": [
+        "status",
+        "platform",
+        "version",
+        "min_version",
+        "recommended",
+        "enforce_at",
+        "store_url"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "ok",
+            "upgrade_recommended",
+            "upgrade_required",
+            "unknown"
+          ]
+        },
+        "platform": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "min_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recommended": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enforce_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "store_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "client_app": {
+      "description": "A declared client (a `client` in config/flags.rb).",
+      "type": "object",
+      "required": [
+        "name",
+        "platform"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/flag_key"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "group": {
+          "$ref": "#/$defs/flag_key"
+        },
+        "min_version": {
+          "type": "string"
+        },
+        "since": {
+          "$ref": "#/$defs/date"
+        },
+        "grace_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "recommended": {
+          "type": "string"
+        },
+        "available": {
+          "type": "string"
+        },
+        "store_url": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "client_status_suite": {
+      "required": [
+        "today",
+        "clients",
+        "cases"
+      ],
+      "properties": {
+        "today": {
+          "$ref": "#/$defs/date"
+        },
+        "clients": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/client_app"
+          }
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "client",
+              "expected"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "scope": {
+                "$ref": "#/$defs/scope"
+              },
+              "client": {
+                "description": "The X-Client-Platform, X-Client-Version and X-Client-Build header values sent.",
+                "$ref": "#/$defs/client"
+              },
+              "group": {
+                "$ref": "#/$defs/flag_key"
+              },
+              "today": {
+                "$ref": "#/$defs/date"
+              },
+              "env_vars": {
+                "$ref": "#/$defs/env_vars"
+              },
+              "store_lookup": {
+                "description": "client name => the version a store lookup answers (null: no answer).",
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "expected": {
+                "$ref": "#/$defs/client_status_payload"
               }
             },
             "additionalProperties": false

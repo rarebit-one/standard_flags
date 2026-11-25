@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Client registry.** `client :name, platform:, min_version:, since:,
+  recommended:, available:, store_url:, grace:, group:` in config/flags.rb
+  (`StandardFlags::ClientApp`). `since:` is required with `min_version:`;
+  a raised minimum is enforced from `since + grace` (whole days, default 7,
+  UTC dates). Clients are unique per platform within a `group:`. Validated at
+  boot, including flag pins that would collide with a client's pins.
+  `Registry#clients` and `Registry#client_for(platform, group:)`.
+- ENV break-glass pins `STANDARD_FLAGS_CLIENT_<NAME>_MIN_VERSION`, `_SINCE`,
+  `_RECOMMENDED` and `_AVAILABLE` beat the code. Invalid pins are ignored;
+  pins in force and ignored pins are reported (by name) in
+  `Diagnostics.report[:clients]` and as health check warnings, and are no
+  longer listed as unknown `STANDARD_FLAGS_*` variables.
+- **Store ceiling.** The enforced minimum, and the recommended version, are
+  never above the newest version known to be in the store (`available:`).
+  `config.client_store_lookup` takes a lookup (or a Hash of client name =>
+  lookup); `StandardFlags::Stores::AppStore.new(bundle_id:, country:)` asks
+  Apple's public iTunes lookup API, cached an hour per process, with a
+  2-second timeout, retried 5 minutes after a failure, never raising; the
+  declared `available:` applies when it has no answer. Google Play has no
+  public API, so Android uses `available:` alone.
+- **`StandardFlags::ClientStatus.for(client, group:)`** and the pre-auth
+  `StandardFlags::ClientStatus::Controller` mixin
+  (`standard_flags_client_status group:, max_age:`; action `client_status`),
+  for `GET /client/status`. It answers `{status, platform, version,
+  min_version, recommended, enforce_at, store_url}` with `status` one of
+  `ok`, `upgrade_recommended`, `upgrade_required` or `unknown` (an unknown
+  platform or version is never told to upgrade), `Cache-Control: max-age=60,
+  private` and a Vary on the client headers. Works on API and Base
+  controllers; it reads only headers, never `standard_flags_context`.
+- **426 guard.** `requires_client_version only:, except:, group:, with:` on
+  `StandardFlags::Controller` answers 426 `client_upgrade_required` through
+  `with:`, `config.controller_responder` or a JSON:API body with `meta:
+  {min_version, store_url}`, handing responders a
+  `StandardFlags::Controller::UpgradeDenial`. Builds in their grace window
+  pass; unknown versions pass unless `config.require_client_version = true`.
+  `StandardFlags::ClientUpgradeRequired` can be raised by app code and is
+  answered the same way, even past an app's later `rescue_from
+  StandardError`.
+- **Compatibility windows.** `compat :k, until_clients: { platform =>
+  "version" }`. With `config.track_compat = true` (off by default; needs
+  runtime rules), each evaluation counts a hit and the oldest client version
+  per platform, written behind (never during an evaluation, at most once
+  per `evaluation_tracking_interval`, best-effort) to the new
+  `standard_flags_compat_stats` table. Operator reads don't count.
+  `flags:stale` reports a window past on every listed platform with no hits
+  for 14 days; `Diagnostics.report[:compat]` and the MCP `get_flag` tool
+  (for compat flags with a window) show the counts. Stores gain
+  `record_compat` and `compat_stats` (nil from stores that don't keep them).
+- The migrations generator writes a second, additive migration,
+  `create_standard_flags_compat_stats`; rerunning it on an existing install
+  adds only that one. The runtime store's readiness doesn't depend on it.
+- `conformance/wire/client_status.json` (scope `wire`, suite
+  `client_status`): registry, header values and today in, the status payload
+  out, for client libraries' upgrade-state parsing; ENV pin and store lookup
+  cases are tagged `server`.
+
 ## [0.3.0] - 2026-11-25
 
 ### Added

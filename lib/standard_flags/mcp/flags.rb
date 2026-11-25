@@ -87,7 +87,18 @@ module StandardFlags
           runtime_rules: Runtime.enabled?,
           rule: readable_rule(rule_for(definition.key)),
           store_revision: store_revision
-        }
+        }.merge(compat(definition))
+      end
+
+      # For a compat flag with `until_clients:` only: its window and, when
+      # `config.track_compat` is on, its stored counts per platform.
+      def compat(definition)
+        return {} unless definition.compat_window?
+
+        report = Diagnostics.compat(registry)
+        entry = report[:flags].find { |flag| flag[:flag] == definition.key }
+        { compat: { until_clients: entry[:until_clients], tracking: report[:tracking], error: report[:error],
+                    stats: entry[:stats] } }
       end
 
       # The evaluation, and the unit key it was for, masked.
