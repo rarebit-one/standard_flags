@@ -130,11 +130,15 @@ send an object with a repeated member name, so how a client reads one is not
 pinned.
 
 **Accepting a payload.** The client remembers `metadata.version` when it is
-a non-empty string whose every character is printable ASCII other than a
+a string of 1 to 256 characters, every one printable ASCII other than a
 space or a double quote (U+0021, U+0023 to U+007E: what an ETag may hold),
 else null, and sends it quoted as If-None-Match next time. A version with
-CR or LF, a space, `"` or a non-ASCII character is not kept. A
-304 changes nothing, even before any payload. Keys the client doesn't
+CR or LF, a space, `"` or a non-ASCII character is not kept, nor is an
+empty one or one longer than 256 characters: a version is sent back in a
+request header, and an oversized one could be refused by every proxy on
+the way. Servers send far shorter versions (a digest). The same rule
+applies to a version read back from a stored payload, and to an ETag
+response header. A 304 changes nothing, even before any payload. Keys the client doesn't
 declare are ignored.
 
 **Reading a key.** An entry's value is *usable* when all of these hold:
@@ -231,9 +235,13 @@ The rules:
 
 - **Invalid manifests.** Besides what `schema/manifest.schema.json` rejects,
   a reader refuses a `version` that isn't the integer 2, a date that isn't a
-  calendar date (`2027-02-30`), a tombstone `serve` without `until`, and a
-  wire listed twice for one audience (by two flags, twice in one list, or by
-  a flag and a tombstone).
+  calendar date (`2027-02-30`, in `removed`, `until`, `remove_by` or a
+  client's `since`), a tombstone `serve` without `until` and
+  `until_clients`, and a wire listed twice for one audience (by two flags,
+  twice in one list, or by a flag and a tombstone). A reader that doesn't
+  run the schema still refuses what it rejects, notably a manifest missing
+  `audiences`, `flags`, `tombstones` or `clients` (`{"version":2}` is not an
+  empty manifest) and an audience whose `public` isn't true or false.
 - **`stale`** is true when the two manifests differ as JSON values,
   compared structurally: object member order is ignored, array order (wires,
   values, flags, tombstones) is significant. The server task compares the

@@ -186,6 +186,8 @@ RSpec.describe StandardFlags::Tooling::Manifest do
       "serve not an object" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(serve: []) ]), /serve is not a non-empty object/ ],
       "an empty serve" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(serve: {}) ]), /serve is not a non-empty object/ ],
       "serve without until" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone.except("until") ]), /serve needs until/ ],
+      "serve without until_clients" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone.except("until_clients") ]), /serve needs until_clients/ ],
+      "until_clients that isn't an object" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(until_clients: []) ]), /serve needs until_clients/ ],
       "until without serve" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone.except("serve") ]), /until or until_clients without serve/ ],
       "serve audience not an object" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(serve: { "web" => 1 }) ]), /serve.web is not an object/ ],
       "a static number" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(serve: { "web" => { "w" => 1 } }) ]), /neither a boolean nor a string/ ],
@@ -200,7 +202,9 @@ RSpec.describe StandardFlags::Tooling::Manifest do
       "a client since that isn't a calendar date" => [ ManifestDocs.doc(clients: { "a" => ManifestDocs.client(since: "2026-02-30") }), /since "2026-02-30"/ ],
       "a client grace that isn't whole days" => [ ManifestDocs.doc(clients: { "a" => ManifestDocs.client(grace: 1.5) }), /grace is not a whole number/ ],
       "a client store_lookup that isn't a boolean" => [ ManifestDocs.doc(clients: { "a" => ManifestDocs.client(store_lookup: {}) }), /store_lookup is not true or false/ ],
-      "a removed that isn't a calendar date" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(removed: "2026-13-01") ]), /removed "2026-13-01"/ ]
+      "a removed that isn't a calendar date" => [ ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone(removed: "2026-13-01") ]), /removed "2026-13-01"/ ],
+      "a remove_by that isn't a date" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag(remove_by: "soon") ]), /remove_by "soon" is not/ ],
+      "a remove_by that isn't a calendar date" => [ ManifestDocs.doc(flags: [ ManifestDocs.flag(remove_by: "2027-02-30") ]), /remove_by "2027-02-30" is not/ ]
     }.each do |label, (json, message)|
       it "refuses #{label}" do
         expect { described_class.read(json) }.to raise_error(described_class::Unreadable, message)
@@ -218,6 +222,9 @@ RSpec.describe StandardFlags::Tooling::Manifest do
         "a bare-string wire list" => ManifestDocs.doc(flags: [ ManifestDocs.flag(audiences: { "web" => "a" }) ]),
         "a wire listed twice in one list" => ManifestDocs.doc(flags: [ ManifestDocs.flag(audiences: { "web" => %w[a a] }) ]),
         "serve without until" => ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone.except("until") ]),
+        "serve without until_clients" => ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone.except("until_clients") ]),
+        "a remove_by that isn't a date" => ManifestDocs.doc(flags: [ ManifestDocs.flag(remove_by: "soon") ]),
+        "a remove_by that isn't a calendar date" => ManifestDocs.doc(flags: [ ManifestDocs.flag(remove_by: "2027-02-30") ]),
         "until without serve" => ManifestDocs.doc(tombstones: [ ManifestDocs.tombstone.except("serve") ]),
         "a client missing a field" => ManifestDocs.doc(clients: { "a" => ManifestDocs.client.except("grace") }),
         "a client store_lookup that isn't a boolean" => ManifestDocs.doc(clients: { "a" => ManifestDocs.client(store_lookup: {}) }),
